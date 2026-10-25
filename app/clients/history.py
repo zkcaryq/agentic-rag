@@ -26,10 +26,16 @@ def _backend():
 
     from app.conf.infra_config import infra_config_pg
 
-    if infra_config_pg.enabled:
+    if infra_config_pg.enabled and infra_config_pg.dsn:
         from app.clients import pg_history_utils
 
         return pg_history_utils
+
+    if infra_config_pg.enabled and not infra_config_pg.dsn:
+        # 配置开了一半：宁可退回本地库，也不要让历史读写把整条问答链路打挂
+        from app.core.logger import logger
+
+        logger.warning("PG_ENABLED=true 但 PG_DSN 为空，历史存储回退到 SQLite")
 
     from app.clients import sqlite_history_utils
 

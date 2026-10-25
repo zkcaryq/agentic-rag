@@ -69,7 +69,14 @@ def _run_async(coro):
 
 
 async def _async_web_search(query: str):
-    """异步执行联网搜索"""
+    """异步执行联网搜索（百炼 MCP）。"""
+    # 没配置就直接跳过：避免在没有 key 的环境里每次查询都等 30 秒超时
+    if not mcp_config.mcp_base_url or not mcp_config.api_key:
+        logger.warning(
+            "未配置百炼 MCP（MCP_DASHSCOPE_BASE_URL / OPENAI_API_KEY），本次跳过联网搜索"
+        )
+        return []
+
     try:
         from agents.mcp import MCPServerSse
 
@@ -78,9 +85,9 @@ async def _async_web_search(query: str):
             params={
                 "url": mcp_config.mcp_base_url,
                 "headers": {"Authorization": mcp_config.api_key},
-                "timeout": 30,
-                "sse_read_timeout": 30
-            }
+                "timeout": 15,
+                "sse_read_timeout": 15,
+            },
         )
 
         await search_mcp.connect()

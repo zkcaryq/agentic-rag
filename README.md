@@ -121,6 +121,12 @@ python scripts/demo_local.py --serve
 没有大模型 key 时答案会降级为**抽取式**（直接给出检索到的原文片段 + 引用编号），
 不会编造内容。把 `.env` 换成百炼 key + Zilliz 后，同一套代码直接变成语义检索 + 生成式回答。
 
+评测框架也能在演示档跑（只验证链路，指标不代表线上）：
+
+```bash
+python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
+```
+
 ## 文档
 
 | 文档 | 内容 |

@@ -31,7 +31,6 @@ except Exception:
     pass
 
 from app.eval.golden_set import GOLDEN_SET  # noqa: E402
-from app.eval.pipelines import PIPELINES, retrieve  # noqa: E402
 from app.eval.retrieval_metrics import evaluate_retrieval, keyword_matcher  # noqa: E402
 
 OUTPUT_DIR = ROOT / "output" / "eval"
@@ -44,11 +43,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=5, help="评估截断位置，默认 5")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 条用例（调试用）")
     parser.add_argument("--no-write", action="store_true", help="只打印，不写文件")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="用本地演示档（Milvus Lite + 词法向量 + 无重排），不需要任何凭据",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    # 演示档的配置必须在导入 app.eval.pipelines 之前锁定
+    if args.demo:
+        from app.conf.demo_config import configure_demo_env
+
+        configure_demo_env()
+        print("[演示档] 词法向量 + 无重排：指标仅用于验证评测链路，不代表线上效果")
+
+    from app.eval.pipelines import PIPELINES, retrieve
 
     pipelines = list(PIPELINES) if args.pipelines == "all" else [
         item.strip() for item in args.pipelines.split(",") if item.strip()

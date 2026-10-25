@@ -35,7 +35,12 @@ def node_product_confirm(state: QueryGraphState) -> QueryGraphState:
     is_stream = state.get("is_stream", False)
 
     # 步骤1：获取历史记录（同时存进 state，供答案节点拼多轮上下文）
-    history = get_recent_messages(session_id, limit=10)
+    try:
+        history = get_recent_messages(session_id, limit=10)
+    except Exception as e:
+        # 历史不可用不应阻断问答
+        logger.warning(f"读取会话历史失败，按无历史处理: {e}")
+        history = []
     state["history"] = [
         {"role": item.get("role", ""), "text": item.get("text", "")} for item in history
     ]
@@ -105,7 +110,8 @@ def step_extract_info(query: str, history: List[Dict]) -> Dict[str, Any]:
         return result
 
     except Exception as e:
-        logger.error(f"提取信息失败: {e}")
+        # 无 LLM 属于预期降级：退回原问题继续检索
+        logger.warning(f"提取信息失败，使用原始问题继续: {e}")
         return {"product_names": [], "rewritten_query": query}
 
 

@@ -11,8 +11,8 @@
 | --- | --- |
 | 已有真实实现且本地可跑 | 解析入库、切分、切片 ID、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、Redis/断点续跑、评测框架、导入失败率埋点 |
 | 已有真实实现但**需要 API key** 才能验证 | 百炼稠密+稀疏向量、gte-rerank 重排、HyDE、VLM 图片摘要、LangSmith |
-| 需要凭据才能验证 | PostgreSQL 历史、RabbitMQ 异步、Zilliz、OSS |
-| 尚未实现/待补 | 百炼 WebSearch（依赖 `openai-agents`，当前不可用会返回空而不是造假数据） |
+| 需要凭据才能验证 | PostgreSQL 历史、RabbitMQ 异步、Zilliz、OSS、WebSearch（百炼 MCP，需 key） |
+| 尚未实现 | 无 |
 
 ---
 
@@ -51,7 +51,7 @@
 
 | 简历表述 | 实现 | 位置 |
 | --- | --- | --- |
-| 向量检索 + HyDE + WebSearch 多路召回 | 三路各自成为独立节点 | `node_search_embedding.py`、`node_search_embedding_hyde.py`、`node_web_search_mcp.py` |
+| 向量检索 + HyDE + WebSearch 多路召回 | 三路各自成为独立节点；WebSearch 走百炼 MCP（`openai-agents` 已装），无 key 时**快速跳过**而不是返回假数据 | `node_search_embedding.py`、`node_search_embedding_hyde.py`、`node_web_search_mcp.py` |
 | RRF 融合 | 加权 RRF（1.0/0.8/0.6，k=60），**保留 `rrf_score`**（原来把分数丢了） | `node_rrf.py:144` |
 | Cross-Encoder 重排序 | 供应商抽象：`gte-rerank-v2` / `bge-reranker-v2-m3` / 本地 / none | `node_rerank.py`、`lm/provider_factory.py` |
 | 相关性分数断崖检测动态 Top-K | 绝对阈值 0.30 + 相邻比 0.60 + 上限 8 + 软下限保底 2 | `node_rerank.py:81` `select_by_cliff` |

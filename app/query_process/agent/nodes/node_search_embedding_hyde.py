@@ -111,5 +111,6 @@ def step_generate_hypothetical_doc(query: str) -> str:
         response = llm.invoke(prompt)
         return response.content.strip()
     except Exception as e:
-        logger.error(f"生成假设性文档失败: {e}")
+        # 无 LLM 属于预期降级，不按错误级别刷屏
+        logger.warning(f"生成假设性文档失败，本次跳过 HyDE: {e}")
         return ""

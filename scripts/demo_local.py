@@ -47,32 +47,10 @@ QUESTIONS = [
 
 
 def configure_env() -> dict:
-    """在导入任何 app 模块之前锁定演示配置。
+    """在导入任何 app 模块之前锁定演示配置。"""
+    from app.conf.demo_config import configure_demo_env
 
-    load_dotenv 默认不覆盖已存在的环境变量，所以这里的值优先于 .env。
-    """
-    DEMO_DIR.mkdir(parents=True, exist_ok=True)
-    defaults = {
-        "EMBEDDING_PROVIDER": "lexical",
-        "EMBEDDING_DIM": "1024",
-        "EMBEDDING_WANT_SPARSE": "false",
-        "RERANK_PROVIDER": "none",
-        "MILVUS_URL": str(DEMO_DIR / "milvus_lite.db"),
-        "MILVUS_TOKEN": "",
-        "STORAGE_BACKEND": "local",
-        "LOCAL_STORAGE_DIR": str(DEMO_DIR / "storage"),
-        "HISTORY_BACKEND": "sqlite",
-        "SQLITE_HISTORY_PATH": str(DEMO_DIR / "history.db"),
-        "PG_ENABLED": "false",
-        "REDIS_ENABLED": "false",
-        "RABBITMQ_ENABLED": "false",
-        "LANGCHAIN_TRACING_V2": "false",
-        "LOG_CONSOLE_LEVEL": "WARNING",
-        "LOG_FILE_ENABLE": "false",
-    }
-    for key, value in defaults.items():
-        os.environ.setdefault(key, value)
-    return defaults
+    return configure_demo_env()
 
 
 def print_profile(profile: dict) -> None:

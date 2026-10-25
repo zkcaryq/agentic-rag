@@ -12,7 +12,7 @@ from app.conf.provider_config import (
 from app.core.logger import logger
 from app.lm.providers.base import EmbeddingProvider, RerankProvider
 
-_SUPPORTED = ("dashscope", "siliconflow", "local")
+_SUPPORTED = ("dashscope", "siliconflow", "local", "lexical")
 
 
 @lru_cache(maxsize=1)
@@ -31,6 +31,11 @@ def get_embedding_provider() -> EmbeddingProvider:
         from app.lm.providers.siliconflow_provider import SiliconFlowEmbeddingProvider
 
         provider = SiliconFlowEmbeddingProvider(embedding_provider_config)
+    elif name == "lexical":
+        # 本地词法向量：无依赖、无 key，仅用于演示与链路验证
+        from app.lm.providers.lexical_provider import LexicalEmbeddingProvider
+
+        provider = LexicalEmbeddingProvider(embedding_provider_config)
     elif name == "local":
         # 本地推理依赖默认不装（tensor 栈体积大、在部分 Windows 上 DLL 会加载失败）
         try:
@@ -59,8 +64,17 @@ def get_embedding_provider() -> EmbeddingProvider:
 @lru_cache(maxsize=1)
 def get_rerank_provider() -> RerankProvider:
     name = rerank_provider_config.provider
-    if name not in _SUPPORTED:
-        raise ValueError(f"不支持的 RERANK_PROVIDER={name}，可选：{'/'.join(_SUPPORTED)}")
+    rerank_supported = ("dashscope", "siliconflow", "local", "none")
+    if name not in rerank_supported:
+        raise ValueError(
+            f"不支持的 RERANK_PROVIDER={name}，可选：{'/'.join(rerank_supported)}"
+        )
+
+    if name == "none":
+        from app.lm.providers.base import NoopRerankProvider
+
+        logger.info("Rerank provider=none（不重排，保留 RRF 顺序）")
+        return NoopRerankProvider()
 
     if name == "dashscope":
         from app.lm.providers.dashscope_provider import DashScopeRerankProvider

@@ -152,6 +152,11 @@ def _create_collection(client: MilvusClient, collection_name: str):
     client.create_collection(
         collection_name=collection_name, schema=schema, index_params=index_params
     )
+    # 建完立刻 load，避免服务重启后集合处于 released 状态导致检索报错
+    try:
+        client.load_collection(collection_name=collection_name)
+    except Exception as e:
+        logger.warning(f"集合 {collection_name} 加载失败（检索时会重试）: {e}")
     logger.info(f"集合 {collection_name} 创建成功（dim={dim}, sparse={with_sparse}）")
 
 

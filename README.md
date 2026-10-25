@@ -95,6 +95,40 @@ python app/import_process/api/file_import_service.py   # :8002 上传
 python app/query_process/api/query_service.py          # :8001 问答 + SSE
 ```
 
+## 本地零凭据演示（不填任何 key 也能跑）
+
+```bash
+# 1. 入库：复用 output/ 里已有的切分结果，灌进 Milvus Lite
+python scripts/demo_local.py --limit 100 --reset
+
+# 2. 起聊天页面（本进程不打开 Milvus，避免单进程文件锁冲突）
+python scripts/demo_local.py --serve
+# 打开 http://127.0.0.1:8001/chat.html
+```
+
+演示档用的是真实实现，只是换成本地可跑的形态：
+
+| 组件 | 生产 | 演示 |
+| --- | --- | --- |
+| 向量库 | Milvus / Zilliz Cloud | Milvus Lite（单文件） |
+| 向量 | 百炼 `text-embedding-v4`（稠密+稀疏） | `lexical`（Hashing TF，无 torch/onnx 依赖） |
+| 重排 | `gte-rerank-v2` | `none`（保留 RRF 顺序） |
+| 图片存储 | 阿里云 OSS | 本地 `output/demo/storage` |
+| 会话历史 | PostgreSQL | SQLite |
+| 消息队列 | RabbitMQ | 进程内线程 |
+
+**注意**：`lexical` 只做字面匹配，没有语义泛化能力，检索质量不代表线上效果；
+没有大模型 key 时答案会降级为**抽取式**（直接给出检索到的原文片段 + 引用编号），
+不会编造内容。把 `.env` 换成百炼 key + Zilliz 后，同一套代码直接变成语义检索 + 生成式回答。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/RESUME-ALIGNMENT.md`](docs/RESUME-ALIGNMENT.md) | **简历每条能力 ↔ 代码位置 ↔ 验证命令**，面试前看这份 |
+| [`docs/rag-eval.md`](docs/rag-eval.md) | 检索评测报告（指标口径 + 四条管线对比，待真实环境跑数） |
+| [`doc/README.md`](doc/README.md) | 语料放置说明（PDF 不入库） |
+
 ## 目录结构
 
 ```

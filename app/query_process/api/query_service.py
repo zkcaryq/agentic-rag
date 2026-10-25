@@ -150,12 +150,16 @@ async def delete_history(session_id: str):
 
 @app.get("/media/{storage_key:path}")
 async def media(storage_key: str):
-    """私有 bucket 的图片访问入口：校验后 302 到带签名的 URL。"""
-    from app.clients.oss_utils import sign_url
+    """图片访问入口：本地后端直接回文件，OSS 后端 302 到签名 URL。"""
+    from app.clients import storage
 
-    url = sign_url(storage_key)
+    local_path = storage.resolve_local(storage_key)
+    if local_path is not None:
+        return FileResponse(local_path)
+
+    url = storage.sign_url(storage_key)
     if not url:
-        raise HTTPException(status_code=404, detail="对象不存在或 OSS 未启用")
+        raise HTTPException(status_code=404, detail="对象不存在或存储未启用")
     return RedirectResponse(url, status_code=302)
 
 

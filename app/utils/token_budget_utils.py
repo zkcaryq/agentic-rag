@@ -19,7 +19,8 @@ def estimate_tokens(text: str) -> int:
         return 0
     cjk_count = len(CJK_PATTERN.findall(text))
     other_count = len(text) - cjk_count
-    return cjk_count + max(1, other_count // 4)
+    # 其余字符按 4 个 1 token 向上取整；纯中文时不额外加 1
+    return cjk_count + (other_count + 3) // 4
 
 
 def build_context(

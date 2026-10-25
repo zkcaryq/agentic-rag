@@ -36,6 +36,21 @@ def get_milvus_client():
         return None
 
 
+def close_milvus_client():
+    """关闭并丢弃单例。
+
+    Milvus Lite 是单进程文件锁，同一个 db 文件不能被两个进程同时打开，
+    所以本地演示里启动独立服务前必须先释放。
+    """
+    global _milvus_client
+    if _milvus_client is not None:
+        try:
+            _milvus_client.close()
+        except Exception:
+            pass
+        _milvus_client = None
+
+
 def _coerce_int64_ids(ids):
     """
     转换chunk_id为Milvus要求的INT64类型（主键字段schema为INT64）
@@ -168,9 +183,29 @@ def create_hybrid_search_requests(dense_vector, sparse_vector, dense_params=None
     return [dense_req, sparse_req]
 
 
+def _is_released_error(exc: Exception) -> bool:
+    return "released" in str(exc).lower()
+
+
+_loaded_collections: set[str] = set()
+
+
+def _ensure_loaded(client, collection_name: str) -> None:
+    """集合未加载时主动 load 一次（Milvus Lite 重启后常见）。"""
+    if collection_name in _loaded_collections:
+        return
+    try:
+        client.load_collection(collection_name=collection_name)
+        _loaded_collections.add(collection_name)
+        logger.info(f"集合 {collection_name} 已加载")
+    except Exception as e:
+        logger.debug(f"load_collection 调用失败（可能已加载）: {e}")
+
+
 def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm_score=False, limit=5,
                   output_fields=None, search_params=None):
     """稠密 + 稀疏双路检索，用 WeightedRanker 加权融合。搜索失败返回 None。"""
+    _ensure_loaded(client, collection_name)
     try:
         # 初始化加权排名器：按权重融合稠密/稀疏向量的搜索结果
         # norm_score=True：先将两个向量评分归一化到0~1区间，再加权计算
@@ -193,6 +228,22 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
         logger.info(f"Milvus混合搜索完成，集合[{collection_name}]共检索到{len(res[0])}条结果")
         return res
     except Exception as e:
+        if _is_released_error(e):
+            # 集合被释放：load 后重试一次
+            _ensure_loaded(client, collection_name)
+            try:
+                res = client.hybrid_search(
+                    collection_name=collection_name,
+                    reqs=reqs,
+                    ranker=WeightedRanker(ranker_weights[0], ranker_weights[1], norm_score=norm_score),
+                    limit=limit,
+                    output_fields=output_fields,
+                    search_params=search_params,
+                )
+                return res
+            except Exception as retry_error:
+                logger.error(f"Milvus混合搜索重试仍失败：{retry_error}", exc_info=True)
+                return None
         logger.error(f"Milvus混合搜索执行失败，集合[{collection_name}]：{str(e)}", exc_info=True)
         return None
 
@@ -203,6 +254,7 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
 
     当 embedding 供应商不支持稀疏向量时退化为这一条路，保证换供应商不会直接炸。
     """
+    _ensure_loaded(client, collection_name)
     try:
         if output_fields is None:
             output_fields = [
@@ -218,15 +270,30 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
             collection_name=collection_name,
             data=[dense_vector],
             anns_field="dense_vector",
-            param=search_params or {"metric_type": "COSINE"},
+            search_params=search_params or {"metric_type": "COSINE"},
             limit=limit,
-            expr=expr,
+            filter=expr or "",
             output_fields=output_fields,
         )
         count = len(res[0]) if res else 0
         logger.info(f"Milvus纯稠密搜索完成，集合[{collection_name}]共检索到{count}条结果")
         return res
     except Exception as e:
+        if _is_released_error(e):
+            _ensure_loaded(client, collection_name)
+            try:
+                return client.search(
+                    collection_name=collection_name,
+                    data=[dense_vector],
+                    anns_field="dense_vector",
+                    search_params=search_params or {"metric_type": "COSINE"},
+                    limit=limit,
+                    filter=expr or "",
+                    output_fields=output_fields,
+                )
+            except Exception as retry_error:
+                logger.error(f"Milvus纯稠密搜索重试仍失败：{retry_error}", exc_info=True)
+                return None
         logger.error(f"Milvus纯稠密搜索失败，集合[{collection_name}]：{str(e)}", exc_info=True)
         return None
 

@@ -48,3 +48,21 @@ class RerankProvider(ABC):
 
         分数必须在实现里统一到 0~1，上层断崖检测直接比较，不再各处理一套量纲。
         """
+
+
+class NoopRerankProvider(RerankProvider):
+    """不重排：原样保留顺序，所有分数相同。
+
+    用于本地演示或供应商不可用时的显式降级——保证 downstream 的
+    断崖检测不会因为分数单调递减而只保留 1 条。
+    """
+
+    name = "none"
+
+    def rerank(
+        self,
+        query: str,
+        documents: list[str],
+        top_n: int | None = None,
+    ) -> list[tuple[int, float]]:
+        return [(index, 1.0) for index in range(len(documents))]

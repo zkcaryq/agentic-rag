@@ -227,16 +227,16 @@ def step_4_upload_and_replace(
     bucket 是私有的，不能直接给外链；正文只写本站的 /media 路径，
     前端取图时由 /media/{storage_key} 换一次签名 URL。
     """
-    from app.clients import oss_utils
+    from app.clients import storage
 
-    if not oss_utils.is_enabled():
-        logger.warning("OSS 未启用，保留原图片引用")
+    if not storage.is_enabled():
+        logger.warning("对象存储未启用，保留原图片引用")
         return md_content
 
     for img_file, img_path, _ in targets:
         try:
-            storage_key = oss_utils.build_storage_key(doc_stem, img_file)
-            uploaded = oss_utils.upload_file(img_path, storage_key)
+            storage_key = storage.build_storage_key(doc_stem, img_file)
+            uploaded = storage.upload_file(img_path, storage_key)
             if not uploaded:
                 continue
 

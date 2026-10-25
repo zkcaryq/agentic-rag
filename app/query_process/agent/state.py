@@ -38,6 +38,7 @@ class QueryGraphState(TypedDict):
 
     # ==================== 生成结果 ====================
     answer: str  # 最终生成的答案
+    answer_mode: str  # llm（大模型生成）或 extractive（无 LLM 时的抽取式降级）
     references: List[Dict[str, Any]]  # 答案实际引用的切片，用于逐段溯源
     context_budget: Dict[str, Any]  # 上下文预算的命中情况（是否截断、丢弃多少条）
 
@@ -62,6 +63,7 @@ def get_default_query_state() -> QueryGraphState:
         "rrf_chunks": [],
         "reranked_docs": [],
         "answer": "",
+        "answer_mode": "",
         "references": [],
         "context_budget": {},
         "tmp": []

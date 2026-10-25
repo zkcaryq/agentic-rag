@@ -102,20 +102,12 @@ def node_search_embedding_hyde(state: QueryGraphState) -> QueryGraphState:
 
 
 def step_generate_hypothetical_doc(query: str) -> str:
-    """生成假设性文档（HyDE 的第一步）。"""
+    """生成假设性文档（HyDE 的第一步）。提示词在 prompts/hyde_prompt.prompt。"""
     try:
+        from app.core.load_prompt import load_prompt
+
         llm = get_llm_client()
-        prompt = f"""请根据以下用户问题，生成一段假设性的理想回答。
-
-用户问题：{query}
-
-要求：
-1. 回答要具体、专业，包含关键信息
-2. 假设你是该领域的专家
-3. 不要使用"可能"、"也许"等不确定词汇
-4. 300字以内
-
-假设性回答："""
+        prompt = load_prompt("hyde_prompt", rewritten_query=query)
         response = llm.invoke(prompt)
         return response.content.strip()
     except Exception as e:

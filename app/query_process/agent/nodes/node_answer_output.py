@@ -73,9 +73,14 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
         )
 
     references = _build_references(used_docs)
-    prompt = _build_prompt(context, query)
+    prompt = _build_prompt(
+        context=context,
+        query=query,
+        history_text=_format_history(state.get("history") or []),
+        product_names=state.get("product_names") or [],
+    )
 
-    raw_answer = _generate(prompt, session_id, is_stream)
+    raw_answer, answer_mode = _generate(prompt, session_id, is_stream, used_docs)
     answer, citation_info = validate_and_fix(raw_answer, len(references))
     if citation_info["has_invalid"]:
         logger.warning(
@@ -83,6 +88,7 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
         )
 
     state["answer"] = answer
+    state["answer_mode"] = answer_mode
     state["references"] = references
     set_task_result(session_id, "answer", answer)
     set_task_result(session_id, "citation_validation", str(citation_info))
@@ -127,31 +133,61 @@ def _build_references(used_docs: list[dict]) -> list[dict]:
     return references
 
 
-def _build_prompt(context: str, query: str) -> str:
-    return f"""你是企业知识库的技术支持助手。请严格依据下面的参考资料回答问题。
-
-【参考资料】
-{context}
-
-【用户问题】
-{query}
-
-【要求】
-1. 只依据参考资料回答，不要编造资料里没有的事实
-2. 每个关键结论后面用 [编号] 标注出处，编号必须是参考资料里出现过的
-3. 资料不足时明确说明"资料中未提及"，不要猜测
-4. 用中文回答，简洁专业
-
-【回答】"""
+def _format_history(history: list[dict], limit: int = 6) -> str:
+    """把最近几轮对话拼成文本，供 prompt 使用。"""
+    if not history:
+        return "（无）"
+    lines = []
+    for message in history[-limit:]:
+        role = "用户" if message.get("role") == "user" else "助手"
+        text = (message.get("text") or "").strip().replace("\n", " ")
+        if text:
+            lines.append(f"{role}: {text[:200]}")
+    return "\n".join(lines) if lines else "（无）"
 
 
-def _generate(prompt: str, session_id: str, is_stream: bool) -> str:
-    """调用大模型。流式时逐 token 推送，非流式一次性返回。"""
-    llm = get_llm_client()
+def _build_prompt(
+    context: str,
+    query: str,
+    history_text: str,
+    product_names: list[str],
+) -> str:
+    """从 prompts/answer_out.prompt 渲染，提示词与代码分离。"""
+    from app.core.load_prompt import load_prompt
+
+    return load_prompt(
+        "answer_out",
+        context=context,
+        history=history_text,
+        product_names="、".join(product_names) if product_names else "（未指定）",
+        question=query,
+    )
+
+
+def _generate(
+    prompt: str,
+    session_id: str,
+    is_stream: bool,
+    used_docs: list[dict],
+) -> tuple[str, str]:
+    """调用大模型；无可用 LLM 时降级为抽取式答案。
+
+    返回 (答案文本, 模式)，模式为 `llm` 或 `extractive`。
+    抽取式不是假答案：它把检索到的高相关原文按引用编号摘出来，
+    让没有 API key 的本地环境也能验证「检索 → 引用 → 流式」整条链路。
+    """
+    try:
+        llm = get_llm_client()
+    except Exception as e:
+        logger.warning(f"大模型不可用，降级为抽取式答案: {e}")
+        answer = _extractive_answer(used_docs)
+        if is_stream:
+            push_to_session(session_id, SSEEvent.DELTA, {"delta": answer})
+        return answer, "extractive"
 
     if not is_stream:
         response = llm.invoke(prompt)
-        return (response.content or "").strip()
+        return (response.content or "").strip(), "llm"
 
     parts: list[str] = []
     try:
@@ -162,11 +198,26 @@ def _generate(prompt: str, session_id: str, is_stream: bool) -> str:
             parts.append(text)
             push_to_session(session_id, SSEEvent.DELTA, {"delta": text})
     except Exception as e:
-        # 流式中途失败：保留已输出的部分，避免前端空白
-        logger.error(f"流式生成中断: {e}", exc_info=True)
+        logger.error(f"流式生成中断，降级为抽取式答案: {e}", exc_info=True)
         if not parts:
-            return "生成答案时出错，请稍后重试。"
-    return "".join(parts).strip()
+            answer = _extractive_answer(used_docs)
+            push_to_session(session_id, SSEEvent.DELTA, {"delta": answer})
+            return answer, "extractive"
+    return "".join(parts).strip(), "llm"
+
+
+def _extractive_answer(used_docs: list[dict]) -> str:
+    """抽取式答案：直接给出检索到的原文片段，并保留 [N] 引用编号。"""
+    if not used_docs:
+        return NO_CONTEXT_ANSWER
+
+    lines = ["（当前环境未配置大模型，以下为检索到的原文摘录，用于验证检索与溯源链路）", ""]
+    for index, doc in enumerate(used_docs, start=1):
+        content = (doc.get("content") or "").strip().replace("\n", " ")
+        if not content:
+            continue
+        lines.append(f"[{index}] {content[:400]}")
+    return "\n".join(lines)
 
 
 def _push_result(

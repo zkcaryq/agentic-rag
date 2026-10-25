@@ -114,23 +114,20 @@ def step_2_build_context(chunks: List[Dict]) -> str:
 
 
 def step_3_call_llm(file_title: str, context: str) -> str:
-    """步骤3：调用LLM识别产品名称"""
+    """步骤3：调用 LLM 识别产品名称。提示词在 prompts/ 下，与代码分离。"""
     try:
+        from app.core.load_prompt import load_prompt
+
         llm = get_llm_client()
-
-        prompt = f"""请根据以下文件标题和文档内容，提取这篇文档描述的核心产品名称。
-
-文件标题：{file_title}
-
-文档内容：
-{context}
-
-请直接输出产品名称，不要输出其他内容。"""
+        system_prompt = load_prompt("product_recognition_system")
+        prompt = load_prompt(
+            "product_name_recognition", file_title=file_title, context=context
+        )
 
         logger.info("调用LLM识别产品名称...")
-        response = llm.invoke(prompt)
+        response = llm.invoke([("system", system_prompt), ("human", prompt)])
 
-        product_name = response.content.strip()
+        product_name = (response.content or "").strip()
         product_name = product_name.replace("\n", "").replace("\r", "").strip()
 
         if not product_name:

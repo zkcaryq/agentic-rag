@@ -6,6 +6,7 @@ import sys
 import json
 from typing import List, Dict, Any
 
+from app.core.load_prompt import load_prompt
 from app.core.logger import logger
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
@@ -33,8 +34,11 @@ def node_product_confirm(state: QueryGraphState) -> QueryGraphState:
     original_query = state.get("original_query", "")
     is_stream = state.get("is_stream", False)
 
-    # 步骤1：获取历史记录
+    # 步骤1：获取历史记录（同时存进 state，供答案节点拼多轮上下文）
     history = get_recent_messages(session_id, limit=10)
+    state["history"] = [
+        {"role": item.get("role", ""), "text": item.get("text", "")} for item in history
+    ]
 
     # 步骤2：提取产品名称和改写问题
     extract_result = step_extract_info(original_query, history)
@@ -84,19 +88,11 @@ def step_extract_info(query: str, history: List[Dict]) -> Dict[str, Any]:
         for msg in history[-5:]:  # 最近5条
             history_text += f"{msg.get('role', '')}: {msg.get('text', '')}\n"
 
-        prompt = f"""请根据历史会话和当前问题，提取产品名称并改写问题。
-
-历史会话：
-{history_text}
-
-当前用户问题：{query}
-
-要求：
-1. 提取产品名称（product_names），如果没有则返回空列表
-2. 改写问题为独立完整的问题（rewritten_query）
-
-请返回JSON格式：
-{{"product_names": ["产品名1"], "rewritten_query": "改写后的问题"}}"""
+        prompt = load_prompt(
+            "rewritten_query_and_productnames",
+            history_text=history_text or "（无）",
+            query=query,
+        )
 
         response = llm.invoke(prompt)
         content = response.content.strip()

@@ -32,6 +32,7 @@ from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding
 from app.import_process.agent.nodes.node_document_split import attach_page_numbers  # noqa: E402
 from app.import_process.agent.nodes.node_import_milvus import node_import_milvus  # noqa: E402
 from app.import_process.agent.state import create_default_state  # noqa: E402
+from app.utils.text_clean_utils import sanitize_content  # noqa: E402
 
 PLACEHOLDER_MARKER = "这是从PDF转换而来的Markdown内容"
 VECTOR_FIELDS = ("dense_vector", "sparse_vector")
@@ -68,6 +69,7 @@ def build_state(chunks_path: Path, chunks: list[dict]) -> dict:
     cleaned = []
     for index, chunk in enumerate(chunks):
         item = {k: v for k, v in chunk.items() if k not in VECTOR_FIELDS}
+        item["content"] = sanitize_content(item.get("content", ""))
         item.setdefault("chunk_id", f"{file_title}_{index}")
         item.setdefault("file_title", file_title)
         item.setdefault("product_name", product_name)

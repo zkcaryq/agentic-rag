@@ -1,0 +1,108 @@
+"""基础设施连接配置：PostgreSQL / Redis / RabbitMQ / LangSmith。
+
+全部走 .env，业务代码不写死任何地址与凭据。
+软路由上的 Redis 与 RabbitMQ 都做了前缀隔离：
+  - Redis ACL 用户 zhanggui 只有 ~rag:* 权限，所以 key 必须以 REDIS_KEY_PREFIX 开头；
+  - RabbitMQ 用户 zhanggui 只有 ^zhanggui\\..* 权限，所以队列/交换机/routing key
+    必须以 MQ_PREFIX 开头，否则会因为权限不足被拒。
+上层拼名字时统一引用这两个常量，不要在业务代码里各写各的。
+"""
+from dataclasses import dataclass
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+REDIS_KEY_PREFIX = "rag:"
+MQ_PREFIX = "zhanggui."
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass
+class PostgresConfig:
+    dsn: str
+    enabled: bool
+
+
+@dataclass
+class RedisConfig:
+    url: str
+    enabled: bool
+    default_ttl_seconds: int
+
+
+@dataclass
+class RabbitMQConfig:
+    url: str
+    enabled: bool
+    prefetch_count: int
+
+    # 导入与查询分队列，就是简历里说的「任务资源隔离」
+    @property
+    def import_exchange(self) -> str:
+        return f"{MQ_PREFIX}import"
+
+    @property
+    def import_queue(self) -> str:
+        return f"{MQ_PREFIX}import.task"
+
+    @property
+    def import_routing_key(self) -> str:
+        return f"{MQ_PREFIX}import.task"
+
+    @property
+    def import_dlq(self) -> str:
+        return f"{MQ_PREFIX}import.dlq"
+
+    @property
+    def import_dlx(self) -> str:
+        return f"{MQ_PREFIX}import.dlx"
+
+    @property
+    def query_exchange(self) -> str:
+        return f"{MQ_PREFIX}query"
+
+    @property
+    def query_queue(self) -> str:
+        return f"{MQ_PREFIX}query.task"
+
+    @property
+    def query_routing_key(self) -> str:
+        return f"{MQ_PREFIX}query.task"
+
+
+@dataclass
+class LangSmithConfig:
+    enabled: bool
+    project: str
+    # api_key 只用于判断是否配置齐全，不在任何位置打印
+
+
+infra_config_pg = PostgresConfig(
+    dsn=os.getenv("PG_DSN", ""),
+    enabled=_env_bool("PG_ENABLED", False),
+)
+
+infra_config_redis = RedisConfig(
+    url=os.getenv("REDIS_URL", ""),
+    enabled=_env_bool("REDIS_ENABLED", False),
+    default_ttl_seconds=int(os.getenv("REDIS_TASK_TTL_SECONDS", "86400")),
+)
+
+infra_config_mq = RabbitMQConfig(
+    url=os.getenv("RABBITMQ_URL", ""),
+    enabled=_env_bool("RABBITMQ_ENABLED", False),
+    prefetch_count=int(os.getenv("RABBITMQ_PREFETCH", "1")),
+)
+
+infra_config_langsmith = LangSmithConfig(
+    enabled=_env_bool("LANGCHAIN_TRACING_V2", False),
+    project=os.getenv("LANGCHAIN_PROJECT", "agentic-rag"),
+)

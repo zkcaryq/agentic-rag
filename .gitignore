@@ -1,0 +1,23 @@
+doc/设备手册汇总.zip
+*.zip
+
+# 环境变量（含凭据，禁止入库）
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 生成物：MinerU 解析结果、切分产物、日志、IDE 配置
+output/
+logs/
+.idea/
+
+# 语料：厂商用户手册不作为源码入库（体积大且受版权保护）
+# 本地放置 *.pdf 到 doc/ 即可，解析产物在 output/
+doc/*
+!doc/README.md

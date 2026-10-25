@@ -1,0 +1,33 @@
+[project]
+name = "agentic-rag"
+version = "0.1.0"
+description = "企业知识库检索增强问答平台：多格式解析、稠密+稀疏混合检索、Cross-Encoder 精排、逐段溯源、SSE 流式问答"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.3",
+    "grandalf>=0.8",
+    "langchain>=1.3.4",
+    "langchain-community>=0.4.2",
+    "langchain-openai>=1.2.2",
+    "langgraph>=1.2.4",
+    "loguru>=0.7.3",
+    "numpy>=2.4.6",
+    "openpyxl>=3.1.5",
+    "oss2>=2.19.1",
+    "pandas>=3.0.3",
+    "pika>=1.4.4",
+    "psycopg[binary]>=3.3.6",
+    "pymilvus>=3.0.0",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.30",
+    "redis>=8.1.0",
+    "regex>=2026.5.9",
+    "requests>=2.34.2",
+    "uvicorn>=0.48.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

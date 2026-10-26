@@ -13,6 +13,7 @@ from app.core.logger import logger
 from app.import_process.agent.state import ImportGraphState
 from app.lm.provider_factory import get_embedding_provider
 from app.utils.task_utils import add_running_task, add_done_task
+from app.utils.escape_milvus_string_utils import escape_milvus_string
 
 
 def node_import_milvus(state: ImportGraphState) -> ImportGraphState:
@@ -167,10 +168,11 @@ def _clean_old_data(client: MilvusClient, collection_name: str, product_name: st
         if collection_name not in client.list_collections():
             return
 
-        # 删除指定产品的数据
+        # 删除指定产品的数据。product_name 来自模型对上传内容的识别，属于外部输入，
+        # 而这是一条 delete 表达式——不转义就等于让输入决定删谁的数据
         client.delete(
             collection_name=collection_name,
-            filter=f'product_name == "{product_name}"'
+            filter=f'product_name == "{escape_milvus_string(product_name)}"'
         )
         logger.info(f"已清理产品 {product_name} 的旧数据")
     except Exception as e:

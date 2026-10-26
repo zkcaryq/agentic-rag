@@ -96,10 +96,10 @@
 
 | 简历写的 | 取证方式 | 注意事项 |
 | --- | --- | --- |
-| 召回准确率提升约 38% | `python scripts/eval_retrieval.py --pipelines all --k 5`，基线是**纯稠密**（dense），对比 hybrid / hyde / full | 72 条 golden set 在 `app/eval/golden_set.py`；**实测不到 38% 就按实测改简历**，不改口径 |
+| 召回准确率提升约 38% | **实测不成立，已按实测改口径。** 2026-10-26 在 Zilliz（82 份文档 / 4444 切片 / 72 条 golden set / K=5）四管线对照：`dense` Hit@5=0.8889 MRR=0.8072 NDCG@5=0.8274；`hybrid` 0.8889/0.8176/0.8353；`hyde` 0.8750/0.7979/0.8172；`full`(混合+HyDE+RRF+重排+断崖) **0.8889/0.8461/0.8568** | 召回被小语料顶满（dense 自己就 0.8889），**增益只在排序**：full 相对 dense 的 MRR +3.9 点（相对 +4.8%）、NDCG +2.9 点（相对 +3.6%）。所以那句要么改成"排序质量 MRR/NDCG 提升约 4%"，要么换更难的评测集；写 38% 一算就穿。复现：`python scripts/eval_retrieval.py --pipelines all --k 5`（约 20 分钟，rerank 需额度） |
 | 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py` | 需要真实跑够样本（4% 分辨率下限约 100 次导入） |
 | 图文混排文档入库 | 72 条 golden set 里 **19 条**专考图片/表格内容；chunk 正文里保留 `[图片：VLM 摘要]` | 可用 `scripts/check_golden.py` 自检 |
-| 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --duration 60`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | 本地演示档（Milvus Lite + 抽取式答案）实测 6 并发 12 轮：成功 12/12，TTFT P50 544ms / P95 1039ms。**这是无大模型参与的下限**，配上 LLM 后 TTFT 会明显变大，别拿这个数当业务指标 |
+| 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --duration 60`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | **实测有瓶颈，别吹高并发。** 演示档（无大模型）6 并发 12 轮：12/12 成功，TTFT P50 544ms / P95 1039ms。真实云端栈（百炼 LLM+embedding+联网，MQ worker 消费）4 并发 4 轮：4/4 成功但 **TTFT P50 53.3s**、吞吐 0.04 轮/秒；6 并发 12 轮全失败（6 个 error 事件 + 5 个 60s 读流超时）。原因两个且互相独立：① 查询 worker 是单进程 + prefetch=1 串行消费，N 个请求就是 N 倍排队时长，要并发得**多开 worker**（部署层水平扩容，0 代码改动）；② 当时百炼 rerank 免费额度耗尽（403 `AllocationQuota.FreeTierOnly`），节点按设计降级成 RRF 顺序、答案照常产出。**这句在扩容之前只能写成"查询任务队列化、可水平扩容的多 consumer 并发"，不能写"支撑高并发"** |
 
 ---
 

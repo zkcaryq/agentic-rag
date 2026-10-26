@@ -42,6 +42,10 @@ class RerankProviderConfig:
     base_url: str
     api_key: str
     timeout_seconds: int
+    # 联网结果的分倍率。<1 表示"私有知识库优先"：通用教程网页在 Cross-Encoder
+    # 下常常比本型号手册更像"直接答案"（实测 web 0.88 vs 手册落榜），不加权就会
+    # 让公网内容挤占上下文，与"企业私有化知识问答"的定位相反。设 1.0 即不降权。
+    web_score_penalty: float
 
 
 # 百炼原生接口（注意：不是兼容模式地址，兼容模式 /compatible-mode/v1 不支持稀疏向量）
@@ -70,4 +74,5 @@ rerank_provider_config = RerankProviderConfig(
         or os.getenv("OPENAI_API_KEY", "")
     ),
     timeout_seconds=int(os.getenv("RERANK_TIMEOUT_SECONDS", "30")),
+    web_score_penalty=float(os.getenv("RERANK_WEB_SCORE_PENALTY", "0.7")),
 )

@@ -1,11 +1,13 @@
 """
 重排序节点
-用 Cross-Encoder（当前默认百炼 gte-rerank-v2）对 RRF 融合后的候选精排，
-再用「断崖检测」自适应决定保留几条，而不是写死取前 5。
+用 Cross-Encoder（供应商可配置：百炼 / SiliconFlow / 本地 / none）对 RRF 融合后的
+候选精排，再用「断崖检测」自适应决定保留几条，而不是写死取前 5。
+联网来源会先按 RERANK_WEB_SCORE_PENALTY 降权，保证私有知识库优先。
 """
 import sys
 from typing import List, Tuple
 
+from app.conf.provider_config import rerank_provider_config
 from app.core.logger import logger
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
@@ -46,15 +48,28 @@ def node_rerank(state: QueryGraphState) -> QueryGraphState:
         if not ranked:
             raise RuntimeError("重排供应商返回空结果")
 
+        # 私有知识库优先：联网结果按倍率降权后再参与排序与断崖截断。
+        # 不加权时通用教程网页常常压过本型号手册（实测 web 0.881 vs 手册落榜，
+        # 答案反而说"资料未提及"），与"企业私有化知识问答"的定位相反。
+        penalty = rerank_provider_config.web_score_penalty
+        effective: List[Tuple[int, float]] = []
+        demoted = 0
         for index, score in ranked:
+            if rrf_chunks[index].get("source") == "web" and penalty != 1.0:
+                score = round(score * penalty, 6)
+                demoted += 1
             rrf_chunks[index]["rerank_score"] = score
+            effective.append((index, score))
+        effective.sort(key=lambda pair: pair[1], reverse=True)
+        if demoted:
+            logger.info(f"联网结果降权 {penalty}：影响 {demoted} 条")
 
-        keep_indexes = select_by_cliff(ranked)
+        keep_indexes = select_by_cliff(effective)
         selected = []
         for index in keep_indexes:
             doc = dict(rrf_chunks[index])
             doc["rerank_score"] = next(
-                (score for i, score in ranked if i == index), 0.0
+                (score for i, score in effective if i == index), 0.0
             )
             selected.append(doc)
 
@@ -62,7 +77,7 @@ def node_rerank(state: QueryGraphState) -> QueryGraphState:
         if selected:
             logger.info(
                 f"重排序完成: 候选 {len(rrf_chunks)} -> 保留 {len(selected)}，"
-                f"最高分 {ranked[0][1]:.3f}，最低入选分 {selected[-1]['rerank_score']:.3f}"
+                f"最高分 {effective[0][1]:.3f}，最低入选分 {selected[-1]['rerank_score']:.3f}"
             )
         else:
             logger.info("重排序完成: 无达标候选")

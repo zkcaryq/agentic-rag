@@ -2,6 +2,7 @@
 产品确认节点
 提取产品名称，改写用户问题
 """
+import re
 import sys
 import json
 from typing import List, Dict, Any
@@ -10,6 +11,7 @@ from app.core.load_prompt import load_prompt
 from app.core.logger import logger
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
+from app.utils.escape_milvus_string_utils import escape_milvus_string
 from app.lm.lm_utils import get_llm_client
 from app.clients.history import get_recent_messages, save_chat_message
 from app.clients.milvus_utils import get_milvus_client
@@ -135,7 +137,8 @@ def step_confirm_items(product_names: List[str]) -> List[str]:
 
         confirmed: List[str] = []
         for item in product_names:
-            safe = str(item).replace('"', "").strip()
+            # 统一走转义工具，别再手写 replace('"','')——反斜杠和控制字符同样能改写表达式
+            safe = escape_milvus_string(item).strip()
             if not safe:
                 continue
             rows = client.query(
@@ -144,10 +147,31 @@ def step_confirm_items(product_names: List[str]) -> List[str]:
                 output_fields=["product_name"],
                 limit=50,
             )
+            if not rows:
+                # 中文口语与库存标题经常对不上：实测「奔图 P3030 打印机」LIKE 不到
+                # "Pantum P3030 User Guide zh_CN V1_2"，于是产品过滤条件会把整个私有库
+                # 滤空、答案只剩联网结果。退一步用型号 token 再认一次。
+                for token in _model_tokens(safe):
+                    rows = client.query(
+                        collection_name=collection_name,
+                        filter=f'product_name like "%{token}%"',
+                        output_fields=["product_name"],
+                        limit=50,
+                    )
+                    if rows:
+                        logger.info(f"产品名按型号 token「{token}」确认回库内叫法")
+                        break
             if rows:
                 names = {row.get("product_name") for row in rows if row.get("product_name")}
-                # 优先用库里完全一致的叫法，找不到就保留模型提取的名称
-                confirmed.append(next((n for n in names if safe in n), item))
+                exact = next((n for n in names if safe in n), None)
+                if exact:
+                    confirmed.append(exact)
+                elif len(names) == 1:
+                    confirmed.append(next(iter(names)))
+                else:
+                    # 命中多个产品时把它们都带上（上限 3），比从集合里瞎挑一个稳：
+                    # 实测挑错过把 ER2100 认成 MER 系列路由器
+                    confirmed.extend(sorted(names)[:3])
             else:
                 confirmed.append(item)
 
@@ -156,3 +180,16 @@ def step_confirm_items(product_names: List[str]) -> List[str]:
     except Exception as e:
         logger.error(f"确认产品失败: {e}")
         return product_names
+
+
+def _model_tokens(name: str) -> List[str]:
+    """从产品名里抽型号串（字母开头、长度≥3 且含数字）。"""
+    seen: List[str] = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", name or ""):
+        # 只要真正像型号的（含数字），Pantum/User/Guide 这类词不算型号
+        if not any(ch.isdigit() for ch in token):
+            continue
+        if token not in seen:
+            seen.append(token)
+    # 长的优先：ER2100 比品牌串 H3C 有区分度，先试它才不会 LIKE 出一整族路由器
+    return sorted(seen, key=len, reverse=True)[:3]

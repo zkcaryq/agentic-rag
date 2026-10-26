@@ -11,7 +11,8 @@ from app.conf.milvus_config import milvus_config
 from app.core.logger import logger
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
-from app.clients.milvus_utils import get_milvus_client, search_with_optional_sparse
+from app.utils.escape_milvus_string_utils import escape_milvus_string
+from app.clients.milvus_utils import get_milvus_client, search_chunks_with_fallback
 from app.lm.provider_factory import get_embedding_provider
 
 
@@ -48,7 +49,9 @@ def node_search_embedding(state: QueryGraphState) -> QueryGraphState:
         # 2. 构建过滤条件
         expr = None
         if product_names and product_names != ["通用"]:
-            quoted = ", ".join(f'"{v}"' for v in product_names)
+            # product_names 是大模型从用户提问里抽出来的，属于外部输入：
+            # 直接拼进 filter 就能被 " 截断改写检索范围，必须走转义
+            quoted = ", ".join(f'"{escape_milvus_string(v)}"' for v in product_names)
             expr = f"product_name in [{quoted}]"
             logger.info(f"过滤条件: {expr}")
 
@@ -60,8 +63,8 @@ def node_search_embedding(state: QueryGraphState) -> QueryGraphState:
             add_done_task(session_id, func_name, is_stream)
             return state
 
-        # 4. 混合检索（无稀疏向量时自动降级为纯稠密）
-        res = search_with_optional_sparse(
+        # 4. 混合检索（无稀疏向量自动降级为纯稠密；产品过滤落空则退回全库）
+        chunks = search_chunks_with_fallback(
             client=client,
             collection_name=milvus_config.chunks_collection,
             dense_vector=record.dense,
@@ -69,9 +72,9 @@ def node_search_embedding(state: QueryGraphState) -> QueryGraphState:
             expr=expr,
             limit=milvus_config.search_top_k,
             ranker_weights=(milvus_config.dense_weight, milvus_config.sparse_weight),
+            label="切片检索",
         )
 
-        chunks = res[0] if res else []
         state["embedding_chunks"] = chunks
         logger.info(f"检索到 {len(chunks)} 个相关切片")
 

@@ -92,89 +92,6 @@ def close_milvus_client():
         _milvus_client = None
 
 
-def _coerce_int64_ids(ids):
-    """
-    转换chunk_id为Milvus要求的INT64类型（主键字段schema为INT64）
-    过滤无效ID，分离可转换/不可转换的ID
-    :param ids: 待转换的chunk_id列表
-    :return: 元组(ok_ids, bad_ids)，ok_ids为可转换的int64类型ID列表，bad_ids为无效ID列表
-    """
-    ok, bad = [], []
-    for x in (ids or []):
-        if x is None:
-            continue
-        try:
-            ok.append(int(x))
-        except Exception:
-            bad.append(x)
-    return ok, bad
-
-
-def fetch_chunks_by_chunk_ids(
-        client,
-        collection_name: str,
-        chunk_ids,
-        *,
-        output_fields=None,
-        batch_size: int = 100,
-):
-    """
-    通过chunk_id主键批量查询Milvus中的切片数据
-    用于补全「仅拥有chunk_id无文本内容」场景的切片信息
-    优先使用get方法（主键直查，性能最优），失败则回退query过滤查询
-    :param client: MilvusClient实例
-    :param collection_name: 集合名称
-    :param chunk_ids: 待查询的chunk_id列表
-    :param output_fields: 需要返回的字段列表，默认返回核心切片字段
-    :param batch_size: 分批查询大小，避免单次查询数据量过大，默认100
-    :return: List[dict]，Milvus实体字典列表，查询失败返回空列表
-    """
-    # 前置校验：客户端/集合名无效直接返回空
-    if client is None:
-        return []
-    if not collection_name:
-        return []
-    # 默认返回字段：核心切片标识与内容字段（含业务切片 ID、页码，供逐段溯源）
-    if output_fields is None:
-        output_fields = list(CORE_OUTPUT_FIELDS)
-
-    # 转换ID为INT64类型，分离有效/无效ID
-    ok_ids, bad_ids = _coerce_int64_ids(chunk_ids)
-    if bad_ids:
-        # 记录无效ID，跳过查询
-        logger.warning(f"存在无法转换为INT64的chunk_id，将跳过查询：{bad_ids}")
-
-    # 无有效ID直接返回空
-    if not ok_ids:
-        return []
-
-    results = []
-    # 分批查询：按batch_size切分有效ID，循环查询
-    for i in range(0, len(ok_ids), batch_size):
-        batch = ok_ids[i: i + batch_size]
-
-        # 方式1：优先使用主键get方法查询（性能最优）
-        if hasattr(client, "get"):
-            try:
-                got = client.get(collection_name=collection_name, ids=batch, output_fields=output_fields)
-                if got:
-                    results.extend(got)
-                continue
-            except Exception as e:
-                logger.warning(f"Milvus get方法查询失败，将回退至query方法：{str(e)}")
-
-        # 方式2：get方法失败，回退使用filter过滤查询
-        try:
-            expr = f"chunk_id in [{', '.join(str(x) for x in batch)}]"
-            q = client.query(collection_name=collection_name, filter=expr, output_fields=output_fields)
-            if q:
-                results.extend(q)
-        except Exception as e:
-            logger.error(f"Milvus query方法批量查询chunk_id失败：{str(e)}", exc_info=True)
-
-    return results
-
-
 def create_hybrid_search_requests(dense_vector, sparse_vector, dense_params=None, sparse_params=None, expr=None,
                                   limit=5):
     """
@@ -306,6 +223,40 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
                 return None
         logger.error(f"Milvus纯稠密搜索失败，集合[{collection_name}]：{str(e)}", exc_info=True)
         return None
+
+
+def search_chunks_with_fallback(client, collection_name, dense_vector, sparse_vector,
+                                expr, limit=5, ranker_weights=(0.8, 0.2), label="检索"):
+    """按产品过滤检索；过滤后为空则退回全库再检索一次。
+
+    产品名口径不一致是常态（用户问「奔图 P3030 打印机」，库里存的可能是
+    "Pantum P3030 User Guide zh_CN V1_2"），硬过滤一旦不匹配就会让私有知识库
+    整体失忆——实测出现过最终上下文 8 条全是联网结果的故障形态。宁可放宽范围，
+    也不要返回空。
+    """
+    chunks = search_with_optional_sparse(
+        client=client,
+        collection_name=collection_name,
+        dense_vector=dense_vector,
+        sparse_vector=sparse_vector,
+        expr=expr,
+        limit=limit,
+        ranker_weights=ranker_weights,
+    )
+    chunks = (chunks[0] if chunks else []) or []
+    if expr and not chunks:
+        logger.warning(f"{label}按产品过滤后无结果，退回不带过滤重检: {expr}")
+        chunks = search_with_optional_sparse(
+            client=client,
+            collection_name=collection_name,
+            dense_vector=dense_vector,
+            sparse_vector=sparse_vector,
+            expr=None,
+            limit=limit,
+            ranker_weights=ranker_weights,
+        )
+        chunks = chunks[0] if chunks else []
+    return chunks
 
 
 def search_with_optional_sparse(client, collection_name, dense_vector, sparse_vector,

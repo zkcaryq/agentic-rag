@@ -6,6 +6,7 @@
   POST /query                提问；is_stream=true 时立即返回 session_id 并后台执行
   GET  /stream/{session_id}  SSE 事件流（ready / progress / delta / final / error）
   GET  /history/{session_id} 会话历史
+  GET  /result/{session_id}  会话结果快照（状态/答案/引用校验/错误，SSE 断开时兜底取回）
   GET  /media/{storage_key}  图片签名 URL 重定向（私有 OSS bucket）
   GET  /metrics              TTFT / 总延迟滑动窗口快照
   GET  /health               健康检查
@@ -49,7 +50,14 @@ from app.utils.sse_utils import (
     push_to_session,
     sse_generator,
 )
-from app.utils.task_utils import set_task_result, update_task_status
+from app.utils.task_utils import (
+    get_done_task_list,
+    get_running_task_list,
+    get_task_result,
+    get_task_status,
+    set_task_result,
+    update_task_status,
+)
 
 PAGE_DIR = Path(__file__).resolve().parents[1] / "page"
 
@@ -192,6 +200,26 @@ async def media(storage_key: str):
     if not url:
         raise HTTPException(status_code=404, detail="对象不存在或存储未启用")
     return RedirectResponse(url, status_code=302)
+
+
+@app.get("/result/{session_id}")
+async def query_result(session_id: str):
+    """读会话的落库结果（状态 + 答案 + 引用校验结论 + 错误）。
+
+    节点本来就把这些写进 Redis 的 `rag:task:{id}:result`，但之前没有任何读接口，
+    等于写了没人取。SSE 断开时（或查询由 worker 进程执行、流没接上）前端就靠这个
+    把结果取回来。
+    """
+    return {
+        "code": 200,
+        "session_id": session_id,
+        "status": get_task_status(session_id),
+        "answer": get_task_result(session_id, "answer"),
+        "citation_validation": get_task_result(session_id, "citation_validation"),
+        "error": get_task_result(session_id, "error"),
+        "done_list": get_done_task_list(session_id),
+        "running_list": get_running_task_list(session_id),
+    }
 
 
 @app.get("/metrics")

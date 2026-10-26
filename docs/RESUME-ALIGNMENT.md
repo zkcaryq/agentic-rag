@@ -104,6 +104,17 @@
 
 ---
 
+### 3.1 语料覆盖与清理结论（2026-10-26）
+
+| 项 | 实测 |
+| --- | --- |
+| 已入库 | 81 个产品 / 4448 切片（Zilliz `kb_chunks`） |
+| 评测集目标型号 | 66 个，其中 **62 个已入库**，4 个（`CS2610DNW` / `LJ2680DN` / `M3070` / `hl3070`）在 `doc/` 有 PDF 但导不进 |
+| dense 的 8 条未命中 | **4 条是语料缺失**（上面那 4 个型号），4 条是相近型号混淆（B5-330 / 平板 C3 / NER214W / MateStation S 被兄弟型号的手册挤掉）——所以 0.8889 里混着数据缺口，不是纯检索能力 |
+| 补导结果 | 4 份全部失败：MinerU 返回 `retry limit reached (5 attempts), please replace the file`；已如实落在 `import_tasks`（4 条 failed）。老代码在这里会用 mock 兜底"成功"，现在会真失败 |
+| 仓库瘦身 | `output/` 从 **1946 MB 降到 69 MB**（删掉 1.88 GB 的 MinerU 解析中间产物：8197 张 jpg、81 个 zip、PDF 副本、`_model.json`、`_content_list_v2.json`），只留链路真正读取的 `chunks.json` / `*content_list.json` / `*.md` / `import_result.json`；删掉原作者 6 月的运行日志与 5 个 `test_*` 垃圾目录 |
+| 瘦身后校验 | `reembed_existing --dry-run` 仍识别 81 份 / 4448 切片；`check_golden` 通过；真跑 1 份 → 页码映射 5/5 命中锚点（说明 content_list 留对了） |
+
 ## 4. 验证命令清单
 
 ```bash

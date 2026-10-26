@@ -9,15 +9,15 @@
 
 | 类别 | 状态 |
 | --- | --- |
-| 已有真实实现且本地可跑 | 解析入库、切分、切片 ID、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、Redis/断点续跑、评测框架、导入失败率埋点、TTFT/延迟指标、并发压测脚本 |
-| 已有真实实现但**需要 API key** 才能验证 | 百炼稠密+稀疏向量、gte-rerank 重排、HyDE、VLM 图片摘要、LangSmith |
-| 需要凭据才能验证 | PostgreSQL 历史、RabbitMQ 异步（导入+查询）、Zilliz、OSS、WebSearch（百炼 MCP，需 key） |
-| 尚未实现 | 无 |
+| **云端真实环境已实测通过**（2026-10-26） | Zilliz Milvus（稠密 HNSW + 稀疏索引，`kb_chunks`）、百炼 `qwen3.7-text-embedding` 稠密1024+稀疏(nnz≈275)、`qwen3.7-text-rerank` 重排、HyDE、WebSearch（百炼 MCP `EnhancedSearch/search_pro`，单节点实测 10 条真结果）、PostgreSQL 17、Redis（含 RPUSH/BLPOP 跨进程探针）、RabbitMQ（导入队列实测 `dispatch=rabbitmq` 跑通）、OSS（写→签名URL读→删）、MinerU（真 PDF 全链路 31.4s 入库 5 切片、页码 1/1/4/5/6）、VLM 图片摘要（4 张图全部生成中文摘要）、切片 ID 端到端可溯源 |
+| 已有真实实现且本地可跑 | 解析入库、切分、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、断点续跑、评测框架、导入失败率埋点、TTFT/延迟指标、并发压测脚本 |
+| 代码就绪但**还没实测** | 查询侧 MQ 派发（`zhanggui.query.task` + worker + 跨进程 SSE）——本地演示档起不了第二个进程，需要在 Zilliz 环境跑一次；`reembed_existing.py` 不写 `import_tasks` 表，所以失败率统计只覆盖真实上传链 |
+| 需要你开一下 | **LangSmith**：开关/别名/自检都已接好（`check_infra` 会拿 key 真调一次 API），但工作区没有任何现成 key，要你去 smith.langchain.com 注册后填 `LANGCHAIN_API_KEY` |
+| 数字待回填 | 召回提升 38%、导入失败率 <4%、并发 TTFT —— 全量重灌跑完出数 |
 
-> RabbitMQ 那条：导入侧本地就能验（MQ 关掉时退线程池），查询侧的**跨进程**事件回传需要
-> Redis 与一个能共享的向量库（Milvus Lite 是单进程文件锁，本地演示起不了第二个进程），
-> 所以这条要等 Zilliz + Redis 凭据到位才能跑通，`scripts/check_infra.py` 里已经加了
-> RPUSH/BLPOP 往返探针。
+> 关于"跨进程"这条的限制：Milvus Lite 是单进程文件锁，本地演示档永远起不了第二个进程，
+> 所以查询侧 MQ 只有单测与代码；现在 Zilliz 已通，两个进程可以共享同一个向量库，
+> 这条随时能实测（`app/query_process/worker.py` + 起查询服务即可）。
 
 ---
 
@@ -148,10 +148,23 @@ python app/import_process/worker.py     # 消费 zhanggui.import.task
 
 ---
 
-## 6. 简历需要同步修改的三处
+## 6. 简历需要同步修改的几处
 
 | 现在写的 | 建议改成 | 原因 |
 | --- | --- | --- |
-| MinIO | 阿里云 OSS（私有 bucket + 签名 URL） | 实际实现已替换 |
-| BGE-M3 生成稠密+稀疏双向量 | 百炼 `text-embedding-v4` 生成稠密+稀疏双向量 | 只有百炼原生接口支持稀疏输出 |
+| MinIO | 阿里云 OSS（私有 bucket + `storage_key` + 签名 URL 回源） | 实际实现已替换并实测通过 |
+| BGE-M3 生成稠密+稀疏双向量 | 百炼 `qwen3.7-text-embedding` 生成稠密(1024)+稀疏双向量 | 只有百炼原生接口支持稀疏输出，实测稀疏 nnz≈275；BGE-M3 本机跑不了（torch DLL 坏），换 SiliconFlow 又出不了稀疏 |
+| Cross-Encoder 重排序 | 补上模型名：百炼 `qwen3.7-text-rerank`（Cross-Encoder） | 现在能报出具体供应商，实测 top1 0.572 |
 | 电商业务文档 | 图文混排的设备/产品手册类文档 | 语料实际是 85 份 3C 设备手册 |
+| **基于 MinerU 完成 PDF/Word/Excel 解析** | **基于 MinerU 完成 PDF 版面解析（含图表与页码定位），Word/Excel 由 python-docx/openpyxl 保留标题层级与表格结构，统一转 Markdown 后进入切分链路** | MinerU 只处理 PDF；Word/Excel 走的是本地结构化解析器。原句会被追问"MinerU 怎么解析 xlsx" |
+| 技术栈里的 LangSmith | 要么填上 key 真开起来，要么从技术栈里去掉 | 目前 `enabled=false`，简历写"链路观测"却没有 trace 截图撑腰，不如不开 |
+
+可直接粘贴的两句（与代码一一对应）：
+
+```
+- 基于 MinerU 云端 API 完成 PDF 版面解析与图片/表格抽取，Word、Excel 分别用 python-docx、
+  openpyxl 保留标题层级与表格结构，统一转 Markdown 进入切分链路；图片解耦上传私有 OSS，
+  正文仅存 storage_key，取图走签名 URL，并由 VLM 生成图片文本摘要使图内信息可检索。
+- 通过百炼 qwen3.7-text-embedding 生成稠密(1024)+稀疏双向量写入 Milvus(Zilliz Cloud)，
+  以 HNSW + SPARSE_INVERTED_INDEX 双索引支撑混合检索。
+```

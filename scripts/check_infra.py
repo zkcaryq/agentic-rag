@@ -85,8 +85,12 @@ def check_oss() -> str:
 
     auth = oss2.Auth(oss_config.access_key_id, oss_config.access_key_secret)
     bucket = oss2.Bucket(auth, oss_config.endpoint, oss_config.bucket)
-    if not bucket.exists():
-        raise RuntimeError("bucket 不存在或无访问权限")
+    # oss2 的 Bucket 没有 exists()，要用 get_bucket_info()——这一步同时验凭证与桶权限
+    info = bucket.get_bucket_info()
+    if info.location.replace("oss-", "") not in oss_config.endpoint:
+        raise RuntimeError(
+            f"桶实际在 {info.location}，与 OSS_ENDPOINT={oss_config.endpoint} 不匹配"
+        )
 
     # 写 -> 签名 URL 读 -> 删，同时验证私有 bucket 的签名链路
     key = f"{oss_config.upload_prefix}/__healthcheck__/{uuid.uuid4().hex}.txt"
@@ -99,7 +103,7 @@ def check_oss() -> str:
     finally:
         bucket.delete_object(key)
 
-    return f"bucket={oss_config.bucket} 写读删+签名URL 正常"
+    return f"bucket={oss_config.bucket} location={info.location} 写读删+签名URL 正常"
 
 
 def check_pg() -> str:

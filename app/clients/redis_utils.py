@@ -1,6 +1,6 @@
 """Redis 客户端与 key 约定。
 
-软路由上的 Redis 是 ACL 模式，应用账号 `zhanggui` 只有 `~rag:*` 权限，
+软路由上的 Redis 是 ACL 模式，应用账号 `arag` 只有 `~rag:*` 权限，
 所以所有 key 必须由 key() 统一加前缀，业务代码不要自己拼字符串。
 """
 import threading

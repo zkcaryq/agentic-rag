@@ -2,8 +2,8 @@
 
 全部走 .env，业务代码不写死任何地址与凭据。
 软路由上的 Redis 与 RabbitMQ 都做了前缀隔离：
-  - Redis ACL 用户 zhanggui 只有 ~rag:* 权限，所以 key 必须以 REDIS_KEY_PREFIX 开头；
-  - RabbitMQ 用户 zhanggui 只有 ^zhanggui\\..* 权限，所以队列/交换机/routing key
+  - Redis ACL 用户 arag 只有 ~rag:* 权限，所以 key 必须以 REDIS_KEY_PREFIX 开头；
+  - RabbitMQ 用户 arag 只有 ^arag\\..* 权限，所以队列/交换机/routing key
     必须以 MQ_PREFIX 开头，否则会因为权限不足被拒。
 上层拼名字时统一引用这两个常量，不要在业务代码里各写各的。
 """
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 REDIS_KEY_PREFIX = "rag:"
-MQ_PREFIX = "zhanggui."
+MQ_PREFIX = "arag."
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

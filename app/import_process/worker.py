@@ -1,11 +1,11 @@
-"""导入 worker：消费 zhanggui.import.task 队列。
+"""导入 worker：消费 arag.import.task 队列。
 
 启动（仓库根目录）：
     .venv/Scripts/python.exe app/import_process/worker.py
 
 队列拓扑见 app/clients/mq_utils.declare_topology：
-  zhanggui.import  -> zhanggui.import.task
-  zhanggui.import.dlx -> zhanggui.import.dlq（处理失败的消息进死信）
+  arag.import  -> arag.import.task
+  arag.import.dlx -> arag.import.dlq（处理失败的消息进死信）
 """
 import json
 import os

@@ -1,7 +1,7 @@
 """RabbitMQ 客户端（pika，同步，与项目风格一致）。
 
-交换机 / 队列 / routing key 全部以 zhanggui. 开头，匹配软路由上该账号的
-^zhanggui\\..* 权限；导入与查询分属不同队列，就是简历里说的「任务资源隔离」。
+交换机 / 队列 / routing key 全部以 arag. 开头，匹配软路由上该账号的
+^arag\\..* 权限；导入与查询分属不同队列，就是简历里说的「任务资源隔离」。
 """
 import json
 from typing import Any, Dict
@@ -100,14 +100,14 @@ def _publish(exchange: str, routing_key: str, payload: Dict[str, Any], label: st
 
 
 def publish_import_task(payload: Dict[str, Any]) -> bool:
-    """投递导入任务到 zhanggui.import.task。"""
+    """投递导入任务到 arag.import.task。"""
     return _publish(
         mq_conf.import_exchange, mq_conf.import_routing_key, payload, "导入任务"
     )
 
 
 def publish_query_task(payload: Dict[str, Any]) -> bool:
-    """投递查询任务到 zhanggui.query.task。
+    """投递查询任务到 arag.query.task。
 
     查询走独立队列，和导入互不堆积：批量灌文档时问答不会被排在几千个导入任务后面，
     这就是简历里的「任务资源隔离」。

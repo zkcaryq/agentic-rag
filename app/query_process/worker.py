@@ -1,10 +1,10 @@
-"""查询 worker：消费 zhanggui.query.task 队列。
+"""查询 worker：消费 arag.query.task 队列。
 
 启动（仓库根目录，需 RABBITMQ_ENABLED=true 且 REDIS_ENABLED=true）：
     .venv/Scripts/python.exe app/query_process/worker.py
 
 拓扑见 app/clients/mq_utils.declare_topology：
-  zhanggui.query -> zhanggui.query.task
+  arag.query -> arag.query.task
 
 为什么要 Redis 事件总线：查询图跑在本进程，EventSource 却连在 API 进程，
 progress/delta/final 事件必须跨进程送达，所以这里把会话标成 remote 传输，

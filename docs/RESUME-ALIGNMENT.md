@@ -81,9 +81,9 @@
 
 | 简历表述 | 实现 | 位置 |
 | --- | --- | --- |
-| RabbitMQ 异步分发 | 上传后投递 `zhanggui.import.task`，失败退进程内线程 | `clients/mq_utils.py:102`、`file_import_service.py` |
-| 查询任务也走队列 | `POST /query`（流式）投 `zhanggui.query.task`，由 `app/query_process/worker.py` 消费执行；MQ 或 Redis 任一不可用则退回本进程线程池 | `clients/mq_utils.py:109`、`query_process/worker.py:42`、`query_service.py`（`_mq_dispatch_enabled`） |
-| 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `zhanggui.import.dlq` | `mq_utils.declare_topology` |
+| RabbitMQ 异步分发 | 上传后投递 `arag.import.task`，失败退进程内线程 | `clients/mq_utils.py:102`、`file_import_service.py` |
+| 查询任务也走队列 | `POST /query`（流式）投 `arag.query.task`，由 `app/query_process/worker.py` 消费执行；MQ 或 Redis 任一不可用则退回本进程线程池 | `clients/mq_utils.py:109`、`query_process/worker.py:42`、`query_service.py`（`_mq_dispatch_enabled`） |
+| 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `arag.import.dlq` | `mq_utils.declare_topology` |
 | 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{sid}:events`，API 进程 BLPOP 后转发给 EventSource | `clients/redis_utils.py:72`、`utils/sse_utils.py:58` |
 | Redis 持久化任务状态 | 任务状态/进度/结果落 Redis（key 前缀 `rag:`，匹配 ACL `~rag:*`），Redis 不可用自动退回内存 | `clients/redis_utils.py`、`task_utils.py` |
 | 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑。**已实测**：构造 done=[4 个解析节点]+checkpoint 的中间态后重跑，日志给出"已恢复字段: [file_title, md_path, md_content, chunks, product_name ...]"并正常完成。跳过条件额外要求 `state["resumable"]`——只凭 done 列表会把"重跑一个已完成任务"变成跳解析却又无快照可恢复、0 切片却记 completed 的假成功（实测踩过，已加红-绿回归用例） | `task_utils.py`（save/load_checkpoint）、`main_graph.py:_resumable`、`tests/test_rag_features.py` |
@@ -141,8 +141,8 @@ python scripts/eval_retrieval.py --pipelines all --k 5
 python scripts/import_stats.py
 
 # MQ 派发查询（需 RabbitMQ + Redis + 共享向量库；Milvus Lite 起不了第二个进程）
-python app/query_process/worker.py      # 消费 zhanggui.query.task
-python app/import_process/worker.py     # 消费 zhanggui.import.task
+python app/query_process/worker.py      # 消费 arag.query.task
+python app/import_process/worker.py     # 消费 arag.import.task
 ```
 
 ---

@@ -44,7 +44,16 @@ def _resumable(node_fn):
         task_id = state.get("task_id", "")
         name = node_fn.__name__
 
-        if task_id and name in _RESUMABLE_NODES and is_node_done(task_id, name):
+        # 只有"这次确实是接着断点跑"才允许跳过：断点快照在任务成功时会被清掉，
+        # 而 done 列表会留着（/status 还要展示进度）。只看 done 列表的话，
+        # 重跑一个已完成的 task_id 就会跳掉解析节点却又无内容可恢复，
+        # 实测跑出过"0 切片但状态 completed"的假成功。
+        if (
+            task_id
+            and name in _RESUMABLE_NODES
+            and state.get("resumable")
+            and is_node_done(task_id, name)
+        ):
             logger.info(f"断点续跑：跳过已完成节点 {name}")
             return state
 

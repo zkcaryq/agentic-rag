@@ -86,7 +86,7 @@
 | 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `zhanggui.import.dlq` | `mq_utils.declare_topology` |
 | 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{sid}:events`，API 进程 BLPOP 后转发给 EventSource | `clients/redis_utils.py:72`、`utils/sse_utils.py:58` |
 | Redis 持久化任务状态 | 任务状态/进度/结果落 Redis（key 前缀 `rag:`，匹配 ACL `~rag:*`），Redis 不可用自动退回内存 | `clients/redis_utils.py`、`task_utils.py` |
-| 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑 | `task_utils.py:247`、`main_graph.py:40` |
+| 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑。**已实测**：构造 done=[4 个解析节点]+checkpoint 的中间态后重跑，日志给出"已恢复字段: [file_title, md_path, md_content, chunks, product_name ...]"并正常完成。跳过条件额外要求 `state["resumable"]`——只凭 done 列表会把"重跑一个已完成任务"变成跳解析却又无快照可恢复、0 切片却记 completed 的假成功（实测踩过，已加红-绿回归用例） | `task_utils.py`（save/load_checkpoint）、`main_graph.py:_resumable`、`tests/test_rag_features.py` |
 | 并发查询支撑 | `scripts/bench_concurrency.py` 压 SSE 全链路，出客户端口径的 TTFT / 端到端 P50/P95/P99 + 成功率 + 吞吐 | `scripts/bench_concurrency.py` |
 | 全链路日志追踪 | loguru 控制台+文件，各节点带 `task_id` 打印阶段与耗时 | `app/core/logger.py`、各 `node_*.py` |
 | 导入失败率埋点 | `import_tasks` 表记 `failed_stage / error_type / retry_count / duration_ms` | `pg_task_utils.py`、`node_*.py` 的 `failed_stage` |
@@ -98,7 +98,7 @@
 | 简历写的 | 取证方式 | 注意事项 |
 | --- | --- | --- |
 | 召回准确率提升约 38% | **实测不成立，已按实测改口径。** 2026-10-26 在 Zilliz（82 份文档 / 4444 切片 / 72 条 golden set / K=5）四管线对照：`dense` Hit@5=0.8889 MRR=0.8072 NDCG@5=0.8274；`hybrid` 0.8889/0.8176/0.8353；`hyde` 0.8750/0.7979/0.8172；`full`(混合+HyDE+RRF+重排+断崖) **0.8889/0.8461/0.8568** | 召回被小语料顶满（dense 自己就 0.8889），**增益只在排序**：full 相对 dense 的 MRR +3.9 点（相对 +4.8%）、NDCG +2.9 点（相对 +3.6%）。所以那句要么改成"排序质量 MRR/NDCG 提升约 4%"，要么换更难的评测集；写 38% 一算就穿。复现：`python scripts/eval_retrieval.py --pipelines all --k 5`（约 20 分钟，rerank 需额度） |
-| 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py` | 需要真实跑够样本（4% 分辨率下限约 100 次导入） |
+| 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py`。**统计完整性已加固**：0 切片的导入现在记 `failed/split/EmptyChunks`（实测 PG 行 `('empty-chunk-1','failed','split','EmptyChunks',0)`），不再静默算成功稀释失败率 | **样本量仍然不够，别写 4%**：4% 的分辨率下限约需 100 次真实上传链导入，目前只有 MinerU 全链路 1 次 + 复用产物重灌 82 次（后者不写 `import_tasks`）。要拿到能上简历的数字，得把 85 份 PDF 全走 `/upload` 真导一遍 |
 | 图文混排文档入库 | 72 条 golden set 里 **19 条**专考图片/表格内容；chunk 正文里保留 `[图片：VLM 摘要]` | 可用 `scripts/check_golden.py` 自检 |
 | 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --total M`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | **实测（真实云端栈，查询走 MQ）：** 1 worker × 4并发4轮 → 4/4 成功，TTFT P50 **53.3s**，0.04 轮/秒；3 worker × 同一负载 → 4/4，P50 **20.3s**，0.08 轮/秒；3 worker × 6并发12轮 → **12/12**，P50 23.7s，0.17 轮/秒。诚实边界：6 并发那轮此前是 0/12 全失败，这次修复同时改了两个变量（百炼额度充值 + worker 从 1 加到 3），不能把功劳全算给扩容。另有 `GET /metrics`：worker 样本经 Redis `rag:metrics:{pid}` 镜像后由 API 进程合并，实测同时给出 `answer_generate ttft_p50=1008ms`（模型侧）与客户端 `TTFT P50=18.5s`，差值即检索+联网+排队。**所以这句写"查询队列化 + 多 consumer 水平扩容 + TTFT 跨进程可观测"站得住，写"高并发/低延迟"站不住**（单查询端到端仍是十几到几十秒） |
 

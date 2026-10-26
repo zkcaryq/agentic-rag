@@ -53,6 +53,7 @@ def execute_import(
 
     # 断点续跑：恢复解析阶段的中间结果，已完成节点由图的包装器跳过
     checkpoint = load_checkpoint(task_id)
+    init_state["resumable"] = bool(checkpoint)
     if checkpoint:
         restored = [field for field in _RESTORE_FIELDS if checkpoint.get(field)]
         for field in restored:
@@ -64,11 +65,26 @@ def execute_import(
         chunk_count = len(final_state.get("chunks", []))
         product_name = final_state.get("product_name", "")
         failed_stage = final_state.get("failed_stage")
-        duration_status = TASK_STATUS_PARTIAL if failed_stage else TASK_STATUS_COMPLETED
+        error_type = None
+
+        if chunk_count == 0 and not failed_stage:
+            # 空结果不能算成功：否则"导入失败率"会被这种静默空跑稀释（实测踩过）
+            failed_stage = "split"
+            error_type = "EmptyChunks"
+
+        duration_status = (
+            TASK_STATUS_FAILED
+            if error_type
+            else (TASK_STATUS_PARTIAL if failed_stage else TASK_STATUS_COMPLETED)
+        )
 
         update_task_status(task_id, duration_status)
         tasks.mark_finished(
-            task_id, duration_status, chunk_count=chunk_count, failed_stage=failed_stage
+            task_id,
+            duration_status,
+            chunk_count=chunk_count,
+            failed_stage=failed_stage,
+            error_type=error_type,
         )
         logger.info(
             f"[{task_id}] 导入任务完成: 产品={product_name}, 切片数={chunk_count}"

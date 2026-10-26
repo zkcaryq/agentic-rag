@@ -197,3 +197,30 @@ def test_office_node_rejects_unsupported_suffix(tmp_path):
     with pytest.raises(ValueError):
         node_office_to_md(state)
     assert state["failed_stage"] == "office"
+
+
+# ==================== 断点续跑的跳过条件 ====================
+def test_resumable_wrapper_only_skips_when_resuming(monkeypatch):
+    """重跑一个已完成过的 task_id 不该被当成"续跑"。
+
+    done 列表会留着（/status 要展示进度），而断点快照在成功时已被清掉；
+    只看 done 列表就会跳过解析节点又无内容可恢复，实测跑出 0 切片却记 completed。
+    """
+    from app.import_process.agent import main_graph as mg
+
+    ran = []
+
+    def node_entry(state):
+        ran.append(1)
+        return state
+
+    node_entry.__name__ = "node_entry"
+    monkeypatch.setattr(mg, "_RESUMABLE_NODES", {"node_entry"})
+    monkeypatch.setattr(mg, "is_node_done", lambda task_id, name: True)
+    monkeypatch.setattr(mg, "save_checkpoint", lambda task_id, state: None)
+
+    wrapped = mg._resumable(node_entry)
+    wrapped({"task_id": "t1", "resumable": False})   # 全新一次：必须真跑
+    assert ran == [1]
+    wrapped({"task_id": "t1", "resumable": True})    # 带断点：允许跳过
+    assert ran == [1]

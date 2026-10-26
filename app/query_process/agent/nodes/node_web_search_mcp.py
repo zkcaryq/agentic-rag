@@ -69,7 +69,14 @@ def _run_async(coro):
 
 
 async def _async_web_search(query: str):
-    """异步执行联网搜索（百炼 MCP）。"""
+    """异步执行联网搜索（百炼 MCP 的 EnhancedSearch 服务）。
+
+    2026-10-26 实测确认的三件事，别再照旧代码猜：
+      - 传输是 Streamable HTTP，`.../mcps/WebSearch/sse` 已 404；
+      - 服务名是 `EnhancedSearch`（不是 `WebSearch`），工具名是 `search_pro`；
+      - 工具入参**只有 query**（多传 count 会被拒：`Only param:query is supported`）；
+      - 鉴权头要 `Bearer <key>`，返回体是 CallToolResult.is_error（新版 mcp 已不用 isError）。
+    """
     # 没配置就直接跳过：避免在没有 key 的环境里每次查询都等 30 秒超时
     if not mcp_config.mcp_base_url or not mcp_config.api_key:
         logger.warning(
@@ -78,26 +85,32 @@ async def _async_web_search(query: str):
         return []
 
     try:
-        from agents.mcp import MCPServerSse
+        from agents.mcp import MCPServerStreamableHttp
 
-        search_mcp = MCPServerSse(
+        search_mcp = MCPServerStreamableHttp(
             name="web_search",
             params={
                 "url": mcp_config.mcp_base_url,
-                "headers": {"Authorization": mcp_config.api_key},
-                "timeout": 15,
-                "sse_read_timeout": 15,
+                "headers": {"Authorization": f"Bearer {mcp_config.api_key}"},
+                "timeout": 20,
             },
         )
 
         await search_mcp.connect()
-        result = await search_mcp.call_tool(
-            tool_name="bailian_web_search",
-            arguments={"query": query, "count": 5}
-        )
-        await search_mcp.cleanup()
+        try:
+            result = await search_mcp.call_tool(
+                tool_name="search_pro",
+                arguments={"query": query},
+            )
+        finally:
+            await search_mcp.cleanup()
 
-        if result and not result.isError and result.content:
+        if getattr(result, "is_error", False):
+            text = result.content[0].text if result.content else ""
+            logger.error(f"联网搜索被服务端拒绝: {text[:200]}")
+            return []
+
+        if result and result.content:
             raw_text = result.content[0].text
             data = json.loads(raw_text)
             return data.get("pages", [])

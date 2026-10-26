@@ -151,28 +151,51 @@ def run_queries(top_k: int) -> None:
     print("\n" + "=" * 70)
 
 
-def serve() -> None:
+SERVICES = {
+    "query": (
+        "app.query_process.api.query_service:app",
+        8001,
+        "聊天页面",
+        "http://127.0.0.1:8001/chat.html",
+    ),
+    "import": (
+        "app.import_process.api.file_import_service:app",
+        8002,
+        "上传页面",
+        "http://127.0.0.1:8002/import.html",
+    ),
+}
+
+
+def serve(target: str = "query") -> None:
     from app.clients.milvus_utils import close_milvus_client
 
-    # Milvus Lite 是单进程文件锁，起独立服务前必须先释放本进程的句柄
+    # Milvus Lite 是单进程文件锁，起独立服务前必须先释放本进程的句柄。
+    # 同理：query 与 import 两个服务也不能同时起，它们抢同一个 db 文件。
     close_milvus_client()
 
-    env = os.environ.copy()
-    command = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "app.query_process.api.query_service:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8001",
-    ]
-    process = subprocess.Popen(command, cwd=str(ROOT), env=env)
+    module, port, label, url = SERVICES[target]
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            module,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=str(ROOT),
+        env=os.environ.copy(),
+    )
 
     print()
-    print("聊天页面已启动： http://127.0.0.1:8001/chat.html")
-    print("（问答走抽取式降级；配上大模型 key 后会变成生成式回答）")
+    print(f"{label}已启动： {url}")
+    if target == "query":
+        print("（问答走抽取式降级；配上大模型 key 后会变成生成式回答）")
+    else:
+        print("（.md / .docx / .xlsx 不需要任何凭据即可入库；.pdf 需要 MinerU token）")
     print("按 Ctrl+C 停止\n")
 
     try:
@@ -192,7 +215,13 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=8, help="入库文档数，默认 8")
     parser.add_argument("--reset", action="store_true", help="入库前清空集合")
     parser.add_argument("--skip-ingest", action="store_true", help="跳过入库，只跑查询")
-    parser.add_argument("--serve", action="store_true", help="入库后启动聊天页面")
+    parser.add_argument(
+        "--serve",
+        nargs="?",
+        const="query",
+        choices=("query", "import"),
+        help="启动服务：--serve 起问答页，--serve import 起上传页",
+    )
     parser.add_argument("--top-k", type=int, default=3)
     args = parser.parse_args()
 
@@ -201,9 +230,9 @@ def main() -> int:
     if args.serve:
         # 关键：本进程绝不能打开 Milvus Lite —— 它是单进程文件锁，
         # 父进程一旦持有句柄，子进程（uvicorn）就起不来。
-        print("启动网页服务（本进程不打开 Milvus，避免文件锁冲突）")
-        print("如需重新入库，请先停掉服务再跑 --limit N --reset")
-        serve()
+        print("启动服务（本进程不打开 Milvus，避免文件锁冲突）")
+        print("两个服务不能同时运行；如需重新入库请先停止服务再跑 --limit N --reset")
+        serve(args.serve)
         return 0
 
     if args.reset:

@@ -104,6 +104,22 @@ python scripts/demo_local.py --limit 100 --reset
 # 2. 起聊天页面（本进程不打开 Milvus，避免单进程文件锁冲突）
 python scripts/demo_local.py --serve
 # 打开 http://127.0.0.1:8001/chat.html
+
+# 3. 想看「上传 → 解析 → 入库」全过程
+python scripts/demo_local.py --serve import
+# 打开 http://127.0.0.1:8002/import.html，或直接：
+curl -F "files=@你的文档.md" http://127.0.0.1:8002/upload
+curl http://127.0.0.1:8002/status/<task_id>
+```
+
+> `.md` / `.docx` / `.xlsx` 走本地解析，零凭据即可入库；
+> `.pdf` 需要 MinerU token。`--serve` 与 `--serve import` 不能同时运行
+> （Milvus Lite 是单进程文件锁）。
+
+评测框架也能在演示档跑（只验证链路，指标不代表线上）：
+
+```bash
+python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
 ```
 
 演示档用的是真实实现，只是换成本地可跑的形态：
@@ -121,12 +137,6 @@ python scripts/demo_local.py --serve
 没有大模型 key 时答案会降级为**抽取式**（直接给出检索到的原文片段 + 引用编号），
 不会编造内容。把 `.env` 换成百炼 key + Zilliz 后，同一套代码直接变成语义检索 + 生成式回答。
 
-评测框架也能在演示档跑（只验证链路，指标不代表线上）：
-
-```bash
-python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
-```
-
 ## 文档
 
 | 文档 | 内容 |
@@ -139,22 +149,28 @@ python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
 
 ```
 app/
-  clients/    milvus_utils / oss_utils / pg_client / pg_history_utils /
-              pg_task_utils / redis_utils / mq_utils / history
-  conf/       各模块 dataclass 配置（milvus / lm / provider / infra / oss ...）
-  eval/       golden_set / retrieval_metrics / pipelines
+  clients/    milvus_utils / oss_utils / storage(oss|local) / history(门面) /
+              pg_client / pg_history_utils / pg_task_utils /
+              sqlite_history_utils / redis_utils / mq_utils
+  conf/       各模块 dataclass 配置：milvus / lm / mineru / bailian_mcp /
+              embedding / reranker / provider / infra / oss / demo_config
+  eval/       golden_set（72 条）/ retrieval_metrics / pipelines（四条管线）
   import_process/   api / agent(nodes) / task_runner / worker
   query_process/    api / agent(nodes) / page
-  lm/         provider_factory + providers(dashscope / siliconflow / local)
-  utils/      task_utils / sse_utils / token_budget_utils / citation_utils
-scripts/      check_infra / check_retrieval / reembed_existing /
+  lm/         provider_factory + providers(dashscope / siliconflow / local / lexical)
+  utils/      task_utils(状态+断点快照) / sse_utils / token_budget_utils /
+              citation_utils / text_clean_utils / rate_limit_utils / path_util
+scripts/      demo_local / check_infra / check_retrieval / reembed_existing /
               milvus_admin / eval_retrieval / check_golden / gate_metrics / import_stats
-tests/        检索指标纯函数单测
-docs/         rag-eval.md（评测报告）
+tests/        检索指标与核心能力单测（34 个，无需凭据）
+prompts/      提示词模板（答案生成 / HyDE / 产品识别 / 问题改写）
+docs/         RESUME-ALIGNMENT.md（简历逐条对照）、rag-eval.md（评测报告）
 ```
 
 ## 已知约束
 
-- 开发机是 Windows 且没有 Docker，运行依赖外部托管的 Milvus / OSS / PostgreSQL / Redis / RabbitMQ；
+- 开发机是 Windows 且没有 Docker，生产形态依赖外部托管的 Milvus / OSS / PostgreSQL / Redis / RabbitMQ；
+  本机 torch 与 onnxruntime 均无法加载，所以**本地跑不了语义向量模型**，只能用云端 API 或演示档词法向量；
 - 软路由侧中间件内存有限（3.7G、无 swap），批量导入请串行执行；
-- 断点续跑只覆盖解析阶段，向量化与入库会重跑（向量不落 Redis）。
+- 断点续跑只覆盖解析阶段，向量化与入库会重跑（向量不落 Redis）；
+- Milvus Lite 为单进程文件锁，问答服务与导入服务不能同时启动。

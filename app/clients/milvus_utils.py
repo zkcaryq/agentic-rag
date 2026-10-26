@@ -7,6 +7,29 @@ from app.core.logger import logger
 _milvus_client = None
 
 
+# 已确认加载过的集合（Milvus Lite / Milvus 都需要 load 才能 query/search）
+_loaded_collections: set[str] = set()
+
+
+def ensure_collection_loaded(client, collection_name: str) -> None:
+    """保证集合处于 loaded 状态。
+
+    集合在进程重启后通常是 released，此时 query/search 会直接报
+    "Collection is in state 'released'"。这里在拿到客户端时主动 load 一次，
+    避免只有检索路径做了兜底、而 query 路径静默失败。
+    """
+    if client is None or not collection_name:
+        return
+    if collection_name in _loaded_collections:
+        return
+    try:
+        client.load_collection(collection_name=collection_name)
+        _loaded_collections.add(collection_name)
+        logger.info(f"集合 {collection_name} 已加载")
+    except Exception as e:
+        logger.debug(f"load_collection 调用失败（可能已加载）: {e}")
+
+
 def get_milvus_client():
     """
     Milvus客户端单例获取方法
@@ -30,6 +53,7 @@ def get_milvus_client():
             else:
                 _milvus_client = MilvusClient(uri=milvus_uri)
             logger.info("Milvus客户端连接成功")
+            ensure_collection_loaded(_milvus_client, milvus_config.chunks_collection)
         return _milvus_client
     except Exception as e:
         logger.error(f"Milvus客户端连接异常：{str(e)}", exc_info=True)
@@ -187,25 +211,10 @@ def _is_released_error(exc: Exception) -> bool:
     return "released" in str(exc).lower()
 
 
-_loaded_collections: set[str] = set()
-
-
-def _ensure_loaded(client, collection_name: str) -> None:
-    """集合未加载时主动 load 一次（Milvus Lite 重启后常见）。"""
-    if collection_name in _loaded_collections:
-        return
-    try:
-        client.load_collection(collection_name=collection_name)
-        _loaded_collections.add(collection_name)
-        logger.info(f"集合 {collection_name} 已加载")
-    except Exception as e:
-        logger.debug(f"load_collection 调用失败（可能已加载）: {e}")
-
-
 def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm_score=False, limit=5,
                   output_fields=None, search_params=None):
     """稠密 + 稀疏双路检索，用 WeightedRanker 加权融合。搜索失败返回 None。"""
-    _ensure_loaded(client, collection_name)
+    ensure_collection_loaded(client, collection_name)
     try:
         # 初始化加权排名器：按权重融合稠密/稀疏向量的搜索结果
         # norm_score=True：先将两个向量评分归一化到0~1区间，再加权计算
@@ -230,7 +239,7 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
     except Exception as e:
         if _is_released_error(e):
             # 集合被释放：load 后重试一次
-            _ensure_loaded(client, collection_name)
+            ensure_collection_loaded(client, collection_name)
             try:
                 res = client.hybrid_search(
                     collection_name=collection_name,
@@ -254,7 +263,7 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
 
     当 embedding 供应商不支持稀疏向量时退化为这一条路，保证换供应商不会直接炸。
     """
-    _ensure_loaded(client, collection_name)
+    ensure_collection_loaded(client, collection_name)
     try:
         if output_fields is None:
             output_fields = [
@@ -280,7 +289,7 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
         return res
     except Exception as e:
         if _is_released_error(e):
-            _ensure_loaded(client, collection_name)
+            ensure_collection_loaded(client, collection_name)
             try:
                 return client.search(
                     collection_name=collection_name,

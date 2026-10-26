@@ -1,21 +1,28 @@
 """
 答案生成节点
-基于检索结果生成最终答案，并做三件事：
+基于检索结果生成最终答案，并做四件事：
   1. 上下文按 token 预算截断（不再无脑拼 N 条）；
   2. 流式时逐 token 推送 DELTA，而不是整段一次性推；
-  3. 生成后做引用后置校验，拦掉模型编造的 [N] 编号。
+  3. 生成后做引用后置校验，拦掉模型编造的 [N] 编号；
+  4. 埋 TTFT / 生成总耗时指标，供 /metrics 与压测脚本读数。
 """
 import sys
+import time
 
 from app.conf.lm_config import lm_config
 from app.core.logger import logger
+from app.core import metrics
 from app.query_process.agent.state import QueryGraphState
 from app.utils.citation_utils import validate_and_fix
 from app.utils.task_utils import add_running_task, add_done_task, set_task_result
 from app.utils.sse_utils import push_to_session, SSEEvent
-from app.utils.token_budget_utils import build_context
+from app.utils.token_budget_utils import build_context, estimate_tokens
 from app.lm.lm_utils import get_llm_client
 from app.clients.history import save_chat_message
+
+# tokens 一律用 estimate_tokens 估（CJK 感知），不取 usage_metadata：
+# 混用"真实 token / 估算 token"两套口径会让 tokens_per_sec 没法横向比较。
+GENERATE_ENDPOINT = "answer_generate"
 
 NO_CONTEXT_ANSWER = "抱歉，没有找到相关的参考资料，请补充一下设备型号或换个问法。"
 
@@ -175,6 +182,9 @@ def _generate(
     返回 (答案文本, 模式)，模式为 `llm` 或 `extractive`。
     抽取式不是假答案：它把检索到的高相关原文按引用编号摘出来，
     让没有 API key 的本地环境也能验证「检索 → 引用 → 流式」整条链路。
+
+    耗时口径：t0 取"开始调用模型"的时刻，所以这里的 TTFT 是模型侧首 Token
+    延迟，不含检索与重排；整轮问答的耗时由查询服务另行埋点（endpoint=query）。
     """
     try:
         llm = get_llm_client()
@@ -185,16 +195,27 @@ def _generate(
             push_to_session(session_id, SSEEvent.DELTA, {"delta": answer})
         return answer, "extractive"
 
+    t0 = time.monotonic()
+
     if not is_stream:
         response = llm.invoke(prompt)
-        return (response.content or "").strip(), "llm"
+        answer = (response.content or "").strip()
+        metrics.record(
+            GENERATE_ENDPOINT,
+            total_ms=(time.monotonic() - t0) * 1000,
+            tokens=estimate_tokens(answer),
+        )
+        return answer, "llm"
 
     parts: list[str] = []
+    ttft_ms: float | None = None
     try:
         for chunk in llm.stream(prompt):
             text = getattr(chunk, "content", "") or ""
             if not text:
                 continue
+            if ttft_ms is None:
+                ttft_ms = (time.monotonic() - t0) * 1000
             parts.append(text)
             push_to_session(session_id, SSEEvent.DELTA, {"delta": text})
     except Exception as e:
@@ -203,7 +224,15 @@ def _generate(
             answer = _extractive_answer(used_docs)
             push_to_session(session_id, SSEEvent.DELTA, {"delta": answer})
             return answer, "extractive"
-    return "".join(parts).strip(), "llm"
+
+    answer = "".join(parts).strip()
+    metrics.record(
+        GENERATE_ENDPOINT,
+        total_ms=(time.monotonic() - t0) * 1000,
+        ttft_ms=ttft_ms,
+        tokens=estimate_tokens(answer),
+    )
+    return answer, "llm"
 
 
 def _extractive_answer(used_docs: list[dict]) -> str:

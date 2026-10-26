@@ -7,10 +7,15 @@
   GET  /stream/{session_id}  SSE 事件流（ready / progress / delta / final / error）
   GET  /history/{session_id} 会话历史
   GET  /media/{storage_key}  图片签名 URL 重定向（私有 OSS bucket）
+  GET  /metrics              TTFT / 总延迟滑动窗口快照
   GET  /health               健康检查
+
+流式查询的派发：优先投 RabbitMQ 由 worker 进程执行（与导入任务资源隔离），
+MQ 或 Redis 不可用时退回本进程线程池，功能不变、只是失去跨进程隔离。
 """
 import os
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -28,7 +33,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.clients import mq_utils
+from app.clients import redis_utils
 from app.clients.history import clear_history, get_recent_messages, save_chat_message
+from app.conf.infra_config import infra_config_metrics
+from app.core import metrics
 from app.core.logger import logger
 from app.query_process.agent.main_graph import query_app
 from app.query_process.agent.state import create_default_query_state
@@ -36,12 +45,16 @@ from app.utils.sse_utils import (
     SSEEvent,
     create_sse_queue,
     get_sse_queue,
+    mark_remote_transport,
     push_to_session,
     sse_generator,
 )
 from app.utils.task_utils import set_task_result, update_task_status
 
 PAGE_DIR = Path(__file__).resolve().parents[1] / "page"
+
+# 整轮问答（含检索、重排、生成）的耗时桶；生成节点自己的模型 TTFT 见 answer_generate
+QUERY_ENDPOINT = "query"
 
 # 查询图是同步阻塞的，放到线程池里跑，避免堵住 FastAPI 的事件循环
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="query")
@@ -61,6 +74,11 @@ class QueryRequest(BaseModel):
     query: str
     session_id: str | None = None
     is_stream: bool = False
+
+
+def _mq_dispatch_enabled() -> bool:
+    """跨进程执行需要两样东西：MQ 派活 + Redis 把事件送回本进程。缺一个就退回线程池。"""
+    return mq_utils.is_enabled() and redis_utils.is_enabled()
 
 
 @app.get("/chat.html", response_class=HTMLResponse)
@@ -86,7 +104,9 @@ async def query(request: QueryRequest):
     )
 
     if not request.is_stream:
+        started = time.monotonic()
         final_state = query_app.invoke(init_state)
+        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         return {
             "code": 200,
             "session_id": session_id,
@@ -96,15 +116,26 @@ async def query(request: QueryRequest):
 
     # 流式：先建队列再派发，客户端随后连 /stream 就能读到缓冲的事件
     create_sse_queue(session_id)
+
+    if _mq_dispatch_enabled() and mq_utils.publish_query_task(
+        {"session_id": session_id, "query": request.query, "is_stream": True}
+    ):
+        # 必须在任何 push 之前标记：标记后事件统一走 Redis，本进程队列不再参与
+        mark_remote_transport(session_id)
+        update_task_status(session_id, "processing", push_queue=True)
+        return {"code": 200, "session_id": session_id, "stream": True, "dispatch": "rabbitmq"}
+
     update_task_status(session_id, "processing", push_queue=True)
     _executor.submit(_run_query_async, init_state, session_id)
-    return {"code": 200, "session_id": session_id, "stream": True}
+    return {"code": 200, "session_id": session_id, "stream": True, "dispatch": "local_thread"}
 
 
 def _run_query_async(state, session_id: str) -> None:
-    """后台执行查询图；所有结果通过 SSE 事件推给前端。"""
+    """线程池分支：在本进程执行查询图，结果通过 SSE 事件推给前端。"""
+    started = time.monotonic()
     try:
         query_app.invoke(state)
+        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         update_task_status(session_id, "completed", push_queue=True)
     except Exception as e:
         logger.error(f"[{session_id}] 查询失败: {e}", exc_info=True)
@@ -161,6 +192,22 @@ async def media(storage_key: str):
     if not url:
         raise HTTPException(status_code=404, detail="对象不存在或存储未启用")
     return RedirectResponse(url, status_code=302)
+
+
+@app.get("/metrics")
+async def metrics_snapshot():
+    """TTFT / 总延迟滑动窗口快照。
+
+    窗口是进程内的：MQ 派发出去的查询样本记在 worker 进程，这里看不到。
+    要端到端的并发数字请用 scripts/bench_concurrency.py（客户端口径，跨进程都算）。
+    """
+    return {
+        "code": 200,
+        "scope": "本进程窗口，不含 worker 进程的样本",
+        "window_enabled": infra_config_metrics.enabled,
+        "query_dispatch": "rabbitmq" if _mq_dispatch_enabled() else "local_thread",
+        "endpoints": metrics.snapshot(),
+    }
 
 
 @app.get("/health")

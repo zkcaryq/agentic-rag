@@ -159,7 +159,18 @@ def check_redis() -> str:
     except Exception:
         acl_note = "ACL 已拦截非 rag: 前缀"
 
-    return f"ping+读写删 OK；{acl_note}"
+    # 跨进程 SSE 事件总线（MQ worker → API 进程）用的就是这对原语，
+    # 直接调生产函数验，别在检查脚本里抄一份 RPUSH/BLPOP。
+    from app.clients import redis_utils
+
+    if not redis_utils.publish_event("__healthcheck__", "ping", {"ok": True}):
+        raise RuntimeError("SSE 事件写入失败，MQ 派发查询会丢事件")
+    event = redis_utils.pop_event("__healthcheck__", timeout=3)
+    redis_utils.clear_events("__healthcheck__")
+    if not event or event.get("event") != "ping":
+        raise RuntimeError("SSE 事件写进去读不回来（BLPOP 不通），跨进程查询链路不通")
+
+    return f"ping+读写删 OK；RPUSH/BLPOP 往返 OK；{acl_note}"
 
 
 def check_rabbitmq() -> str:

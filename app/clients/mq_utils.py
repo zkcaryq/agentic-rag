@@ -70,8 +70,8 @@ def declare_topology(channel) -> None:
     )
 
 
-def publish_import_task(payload: Dict[str, Any]) -> bool:
-    """投递导入任务。失败返回 False，由调用方决定是否退回进程内执行。"""
+def _publish(exchange: str, routing_key: str, payload: Dict[str, Any], label: str) -> bool:
+    """投递一条持久化 JSON 消息。失败返回 False，由调用方决定退回进程内执行。"""
     import pika
 
     if not is_enabled():
@@ -82,8 +82,8 @@ def publish_import_task(payload: Dict[str, Any]) -> bool:
             channel = connection.channel()
             declare_topology(channel)
             channel.basic_publish(
-                exchange=mq_conf.import_exchange,
-                routing_key=mq_conf.import_routing_key,
+                exchange=exchange,
+                routing_key=routing_key,
                 body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # 持久化，broker 重启不丢
@@ -92,8 +92,26 @@ def publish_import_task(payload: Dict[str, Any]) -> bool:
             )
         finally:
             connection.close()
-        logger.info(f"导入任务已投递到 {mq_conf.import_queue}: {payload.get('task_id')}")
+        logger.info(f"{label}已投递: {payload.get('task_id') or payload.get('session_id')}")
         return True
     except Exception as e:
-        logger.error(f"投递导入任务失败: {e}", exc_info=True)
+        logger.error(f"投递{label}失败: {e}", exc_info=True)
         return False
+
+
+def publish_import_task(payload: Dict[str, Any]) -> bool:
+    """投递导入任务到 zhanggui.import.task。"""
+    return _publish(
+        mq_conf.import_exchange, mq_conf.import_routing_key, payload, "导入任务"
+    )
+
+
+def publish_query_task(payload: Dict[str, Any]) -> bool:
+    """投递查询任务到 zhanggui.query.task。
+
+    查询走独立队列，和导入互不堆积：批量灌文档时问答不会被排在几千个导入任务后面，
+    这就是简历里的「任务资源隔离」。
+    """
+    return _publish(
+        mq_conf.query_exchange, mq_conf.query_routing_key, payload, "查询任务"
+    )

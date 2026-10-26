@@ -85,6 +85,14 @@ class LangSmithConfig:
     # api_key 只用于判断是否配置齐全，不在任何位置打印
 
 
+@dataclass
+class MetricsConfig:
+    """流式性能指标（TTFT / 总延迟）的进程内滑动窗口聚合配置。"""
+
+    enabled: bool
+    window_size: int
+
+
 infra_config_pg = PostgresConfig(
     dsn=os.getenv("PG_DSN", ""),
     enabled=_env_bool("PG_ENABLED", False),
@@ -105,4 +113,9 @@ infra_config_mq = RabbitMQConfig(
 infra_config_langsmith = LangSmithConfig(
     enabled=_env_bool("LANGCHAIN_TRACING_V2", False),
     project=os.getenv("LANGCHAIN_PROJECT", "agentic-rag"),
+)
+
+infra_config_metrics = MetricsConfig(
+    enabled=_env_bool("METRICS_ENABLED", True),
+    window_size=int(os.getenv("METRICS_WINDOW_SIZE", "200")),
 )

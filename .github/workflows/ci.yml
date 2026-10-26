@@ -23,6 +23,11 @@ jobs:
       - name: 语法检查
         run: uv run python -m compileall -q app scripts tests
 
+      # 这个仓库被 import 期炸掉坑过两次（torch DLL、fastembed SEGFAULT），
+      # 语法检查发现不了，必须真把服务和 worker 导一遍
+      - name: 服务与 worker 可导入
+        run: uv run python -c "import app.query_process.api.query_service, app.query_process.worker, app.import_process.api.file_import_service, app.import_process.worker"
+
       - name: 单测
         run: uv run python -m pytest tests/ -q
 

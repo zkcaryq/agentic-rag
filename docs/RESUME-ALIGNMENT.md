@@ -9,10 +9,15 @@
 
 | 类别 | 状态 |
 | --- | --- |
-| 已有真实实现且本地可跑 | 解析入库、切分、切片 ID、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、Redis/断点续跑、评测框架、导入失败率埋点 |
+| 已有真实实现且本地可跑 | 解析入库、切分、切片 ID、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、Redis/断点续跑、评测框架、导入失败率埋点、TTFT/延迟指标、并发压测脚本 |
 | 已有真实实现但**需要 API key** 才能验证 | 百炼稠密+稀疏向量、gte-rerank 重排、HyDE、VLM 图片摘要、LangSmith |
-| 需要凭据才能验证 | PostgreSQL 历史、RabbitMQ 异步、Zilliz、OSS、WebSearch（百炼 MCP，需 key） |
+| 需要凭据才能验证 | PostgreSQL 历史、RabbitMQ 异步（导入+查询）、Zilliz、OSS、WebSearch（百炼 MCP，需 key） |
 | 尚未实现 | 无 |
+
+> RabbitMQ 那条：导入侧本地就能验（MQ 关掉时退线程池），查询侧的**跨进程**事件回传需要
+> Redis 与一个能共享的向量库（Milvus Lite 是单进程文件锁，本地演示起不了第二个进程），
+> 所以这条要等 Zilliz + Redis 凭据到位才能跑通，`scripts/check_infra.py` 里已经加了
+> RPUSH/BLPOP 往返探针。
 
 ---
 
@@ -68,15 +73,20 @@
 | 同步问答 + SSE 流式增量 | `POST /query` 非流式直接返回；流式先建队列再后台跑，`llm.stream` 逐 token 推 `delta` | `query_service.py`、`node_answer_output.py` |
 | 节点级进度跟踪协议 | `ready/progress/delta/final/error/close` + 节点中文名映射 | `app/utils/sse_utils.py`、`app/utils/task_utils.py` |
 | 前端实时观测链路 | 进度条 + `[N]` 引用高亮 + 来源列表（含页码/分数），所有文本做 HTML 转义 | `app/query_process/page/chat.html` |
+| TTFT / 延迟指标埋点 | 按 endpoint 分桶的滑动窗口（默认 200 样本），P50/P95/P99 线性插值；`query` 记整轮、`answer_generate` 记模型首 Token | `app/core/metrics.py:45`、`node_answer_output.py:203`、`query_service.py:109` |
+| 指标出口 | `GET /metrics` 返回窗口快照 + 当前派发模式（`rabbitmq` / `local_thread`） | `query_service.py`（`metrics_snapshot`） |
 
 ### 2.4 异步任务调度与可用性
 
 | 简历表述 | 实现 | 位置 |
 | --- | --- | --- |
-| RabbitMQ 异步分发 | 上传后投递 `zhanggui.import.task`，失败退进程内线程 | `clients/mq_utils.py:73`、`file_import_service.py` |
-| 任务资源隔离 | 导入/查询分属不同 exchange+queue，导入失败进 `zhanggui.import.dlq` | `mq_utils.declare_topology` |
+| RabbitMQ 异步分发 | 上传后投递 `zhanggui.import.task`，失败退进程内线程 | `clients/mq_utils.py:102`、`file_import_service.py` |
+| 查询任务也走队列 | `POST /query`（流式）投 `zhanggui.query.task`，由 `app/query_process/worker.py` 消费执行；MQ 或 Redis 任一不可用则退回本进程线程池 | `clients/mq_utils.py:109`、`query_process/worker.py:42`、`query_service.py`（`_mq_dispatch_enabled`） |
+| 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `zhanggui.import.dlq` | `mq_utils.declare_topology` |
+| 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{sid}:events`，API 进程 BLPOP 后转发给 EventSource | `clients/redis_utils.py:72`、`utils/sse_utils.py:58` |
 | Redis 持久化任务状态 | 任务状态/进度/结果落 Redis（key 前缀 `rag:`，匹配 ACL `~rag:*`），Redis 不可用自动退回内存 | `clients/redis_utils.py`、`task_utils.py` |
 | 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑 | `task_utils.py:247`、`main_graph.py:40` |
+| 并发查询支撑 | `scripts/bench_concurrency.py` 压 SSE 全链路，出客户端口径的 TTFT / 端到端 P50/P95/P99 + 成功率 + 吞吐 | `scripts/bench_concurrency.py` |
 | 全链路日志追踪 | loguru 控制台+文件，各节点带 `task_id` 打印阶段与耗时 | `app/core/logger.py`、各 `node_*.py` |
 | 导入失败率埋点 | `import_tasks` 表记 `failed_stage / error_type / retry_count / duration_ms` | `pg_task_utils.py`、`node_*.py` 的 `failed_stage` |
 
@@ -89,6 +99,7 @@
 | 召回准确率提升约 38% | `python scripts/eval_retrieval.py --pipelines all --k 5`，基线是**纯稠密**（dense），对比 hybrid / hyde / full | 72 条 golden set 在 `app/eval/golden_set.py`；**实测不到 38% 就按实测改简历**，不改口径 |
 | 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py` | 需要真实跑够样本（4% 分辨率下限约 100 次导入） |
 | 图文混排文档入库 | 72 条 golden set 里 **19 条**专考图片/表格内容；chunk 正文里保留 `[图片：VLM 摘要]` | 可用 `scripts/check_golden.py` 自检 |
+| 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --duration 60`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | 本地演示档（Milvus Lite + 抽取式答案）实测 6 并发 12 轮：成功 12/12，TTFT P50 544ms / P95 1039ms。**这是无大模型参与的下限**，配上 LLM 后 TTFT 会明显变大，别拿这个数当业务指标 |
 
 ---
 
@@ -97,20 +108,29 @@
 ```bash
 # 静态（无凭据，CI 同款）
 python -m compileall app scripts tests
-python -m pytest tests/ -q              # 34 个用例
+python -m pytest tests/ -q              # 45 个用例
 python scripts/check_golden.py          # 72 条评测集自检
 
 # 本地演示（无凭据）
 python scripts/demo_local.py --limit 100 --reset
 python scripts/demo_local.py --serve    # http://127.0.0.1:8001/chat.html
 
+# 并发与延迟（服务起着，另开一个终端）
+python scripts/bench_concurrency.py --concurrency 6 --total 12
+python scripts/bench_concurrency.py --concurrency 16 --duration 120 --json output/bench/run.json
+curl http://127.0.0.1:8001/metrics      # 服务端窗口快照
+
 # 真实链路（需 .env）
-python scripts/check_infra.py           # 9 项连通性
+python scripts/check_infra.py           # 9 项连通性（含 Redis RPUSH/BLPOP 探针）
 python scripts/milvus_admin.py --recreate
 python scripts/reembed_existing.py
 python scripts/check_retrieval.py       # 向量真实 / 可溯源 / 重排生效
 python scripts/eval_retrieval.py --pipelines all --k 5
 python scripts/import_stats.py
+
+# MQ 派发查询（需 RabbitMQ + Redis + 共享向量库；Milvus Lite 起不了第二个进程）
+python app/query_process/worker.py      # 消费 zhanggui.query.task
+python app/import_process/worker.py     # 消费 zhanggui.import.task
 ```
 
 ---
@@ -122,6 +142,9 @@ python scripts/import_stats.py
 3. **为什么引用要做后置校验**：模型会编 `[7]` 这种不存在的编号；在返回前正则校验并删除，比在 prompt 里反复强调可靠。
 4. **为什么断点续跑只覆盖解析阶段**：MinerU 解析是分钟级且花钱，向量化是秒级；把快照做在解析产物上，收益最大、实现最轻（不引入 LangGraph checkpointer）。
 5. **为什么 Milvus Lite 演示档不做稀疏**：Lite 不支持稀疏索引；代码用 `search_with_optional_sparse` 自动降级为纯稠密，换回 Zilliz 即恢复混合检索。
+6. **为什么跨进程事件走 Redis 列表而不是 pubsub**：应用账号在 Redis ACL 里只有 `~rag:*` 的 key 权限，没有频道权限；列表既能 TTL 兜底又能积压，正好匹配"worker 生产、API 进程消费"的节奏。代价是 API 进程要用一条独立连接做 BLPOP（阻塞会占住连接，不能共用单例）。
+7. **为什么 TTFT 分两个口径**：`/metrics` 里的 `answer_generate` 从"开始调模型"起算，是模型侧首 Token；压测脚本的 TTFT 从"发出请求"起算，含排队+检索+重排，是用户感知的。合成一个数就会把线程池排队的开销藏进"模型很慢"或者反过来。
+8. **为什么 worker 处理失败不重投**：一次问答失败让用户重新问比后台重试更符合语义；直接 ack 并回 `error` 事件，避免毒消息在队列里打转（导入侧相反，所以导入侧才有死信队列）。
 
 ---
 

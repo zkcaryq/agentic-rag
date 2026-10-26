@@ -6,6 +6,7 @@ from langchain_core.exceptions import LangChainException
 from typing import Optional
 
 # 项目内部依赖
+from app.conf.infra_config import apply_langsmith_env, infra_config_langsmith
 from app.conf.lm_config import lm_config
 from app.core.logger import logger
 
@@ -53,8 +54,12 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
         model_kwargs["response_format"] = {"type": "json_object"}
         logger.debug(f"[LLM客户端] 已开启JSON输出模式，模型将返回标准JSON结构")
 
-    # 5. 客户端初始化：捕获LangChain封装层异常，抛出更友好的提示
+    # 5. 客户端初始化：捕获 LangChain 封装层异常，抛出更友好的提示
     try:
+        # langchain 靠进程环境变量决定要不要上报 LangSmith，建实例前先把别名写全，
+        # 否则换了 SDK 变量名就会出现"配置里开了、链路里没数据"的假象
+        if apply_langsmith_env():
+            logger.info(f"[LangSmith] 链路追踪已启用 project={infra_config_langsmith.project}")
         llm_client = ChatOpenAI(
             model=target_model,  # 目标模型名
             temperature=lm_config.llm_temperature or 0.1,  # 低温度保证输出确定性（0~1）

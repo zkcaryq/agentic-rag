@@ -286,13 +286,33 @@ def check_mineru() -> str:
 def check_langsmith() -> str:
     import os
 
-    from app.conf.infra_config import infra_config_langsmith as cfg
+    from app.conf.infra_config import LangSmithConfig, infra_config_langsmith as cfg
 
     if not cfg.enabled:
-        raise SkipCheck("LANGCHAIN_TRACING_V2=false")
-    if not (os.getenv("LANGCHAIN_API_KEY") or "").strip():
-        raise SkipCheck("已开启 tracing 但未配置 LANGCHAIN_API_KEY")
-    return f"project={cfg.project}"
+        raise SkipCheck(
+            f"未开启 tracing（{'/'.join(LangSmithConfig.TRACING_ALIASES)} 全部为 false）"
+        )
+    key = next(
+        (
+            os.getenv(name).strip()
+            for name in LangSmithConfig.KEY_ALIASES
+            if (os.getenv(name) or "").strip()
+        ),
+        "",
+    )
+    if not key:
+        raise SkipCheck(
+            f"已开启 tracing 但未配置密钥（{'/'.join(LangSmithConfig.KEY_ALIASES)}）"
+        )
+
+    # 不只看变量存不存在，真去 API 取一次数据：密钥错/无权限在这里就会暴露
+    try:
+        from langsmith import Client
+    except ImportError:
+        raise SkipCheck("未安装 langsmith（uv add langsmith）")
+    client = Client(api_key=key)
+    list(client.list_runs(limit=1))
+    return f"project={cfg.project}，API 鉴权与读取正常"
 
 
 CHECKS = {

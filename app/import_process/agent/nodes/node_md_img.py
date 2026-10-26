@@ -32,7 +32,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         1. 获取MD内容和图片目录
         2. 扫描MD中引用的图片
         3. 调用多模态大模型生成图片摘要
-        4. 上传图片到MinIO并替换MD中的路径
+        4. 上传图片到对象存储（OSS 或本地档）并把正文改成 storage_key
         5. 保存处理后的MD文件
 
     Args:

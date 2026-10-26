@@ -84,6 +84,13 @@ class LangSmithConfig:
     project: str
     # api_key 只用于判断是否配置齐全，不在任何位置打印
 
+    # langsmith SDK 在不同版本里读的名字不一样：LANGCHAIN_TRACING_V2（旧）、
+    # LANGSMITH_TRACING / LANGSMITH_TRACING_V2（新）都出现过。简历里写了 LangSmith
+    # 链路观测，所以不能把开关押在某一个变量名上——升级 SDK 就会静默失效。
+    TRACING_ALIASES = ("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGSMITH_TRACING_V2")
+    KEY_ALIASES = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY")
+    PROJECT_ALIASES = ("LANGCHAIN_PROJECT", "LANGSMITH_PROJECT")
+
 
 @dataclass
 class MetricsConfig:
@@ -110,10 +117,38 @@ infra_config_mq = RabbitMQConfig(
     prefetch_count=int(os.getenv("RABBITMQ_PREFETCH", "1")),
 )
 
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _any_env_bool(names: tuple[str, ...]) -> bool:
+    """任一别名置真即算开启（只看显式设过的，没设的按 False 处理）。"""
+    return any(_env_bool(name, False) for name in names if os.getenv(name) is not None)
+
+
 infra_config_langsmith = LangSmithConfig(
-    enabled=_env_bool("LANGCHAIN_TRACING_V2", False),
-    project=os.getenv("LANGCHAIN_PROJECT", "agentic-rag"),
+    enabled=_any_env_bool(LangSmithConfig.TRACING_ALIASES),
+    project=_first_env(LangSmithConfig.PROJECT_ALIASES) or "agentic-rag",
 )
+
+
+def apply_langsmith_env() -> bool:
+    """把 tracing 开关与项目名写全所有别名，返回是否处于开启状态。
+
+    由 LLM 客户端在初始化前调用：langchain 是否上报完全看进程环境变量，
+    这里统一一次，避免"配置里开了但 SDK 读的是另一个名字"。
+    """
+    if not infra_config_langsmith.enabled:
+        return False
+    for name in LangSmithConfig.TRACING_ALIASES:
+        os.environ[name] = "true"
+    for name in LangSmithConfig.PROJECT_ALIASES:
+        os.environ[name] = infra_config_langsmith.project
+    return True
 
 infra_config_metrics = MetricsConfig(
     enabled=_env_bool("METRICS_ENABLED", True),

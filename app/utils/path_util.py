@@ -1,22 +1,12 @@
-# app/utils/path_utils.py
-from pathlib import Path
-from dotenv import load_dotenv
+"""项目根目录定位。
+
+模块导入时就会 load_dotenv()，这也是演示档必须**直接赋值**而不是 setdefault
+的原因（见 app/conf/demo_config.py）。
+"""
 import os
 from pathlib import Path
 
-def get_path_dir(ps:int = 0)->Path:
-    """
-    pathlib.Path 提供了 parents 属性，这是一个有序的路径上级目录迭代器，直接通过索引取值就能快速获取「上 N 级目录」，完美解决多层 .parent 繁琐的问题，这也是官方推荐的简化写法！
-    核心规则：parents[N] 索引对应「向上的层级数」
-    parents[0] → 等价于 .parent（当前路径的上 1 级目录）
-    parents[1] → 等价于 .parent.parent（当前路径的上 2 级目录）
-    parents[2] → 等价于 .parent.parent.parent（当前路径的上 3 级目录）
-    以此类推，parents[N] → 直接获取上 N+1 级目录，索引越⼤，层级越靠上
-    :param ps:
-    :return:
-    """
-    dir_path = Path(__file__).parents[ps]
-    return dir_path
+from dotenv import load_dotenv
 
 
 def get_project_root(identifier: str = ".env") -> Path:

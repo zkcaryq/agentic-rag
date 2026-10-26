@@ -219,25 +219,6 @@ def clear_checkpoint(task_id: str) -> None:
         pass
 
 
-def clear_task(task_id: str) -> None:
-    client = get_redis()
-    if client is not None:
-        try:
-            client.delete(
-                _status_key(task_id),
-                _key(task_id, "running"),
-                _key(task_id, "done"),
-                _key(task_id, "result"),
-                _key(task_id, "checkpoint"),
-            )
-        except Exception:
-            pass
-    _tasks_running_list.pop(task_id, None)
-    _tasks_done_list.pop(task_id, None)
-    _tasks_status.pop(task_id, None)
-    _tasks_result.pop(task_id, None)
-
-
 # ---------------------------
 # 断点续跑：轻量状态快照
 # ---------------------------

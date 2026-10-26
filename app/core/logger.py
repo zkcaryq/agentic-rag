@@ -90,11 +90,6 @@ except Exception as e:
 
 
 # 导出便捷函数
-def get_logger():
-    """获取配置好的logger实例"""
-    return logger
-
-
 # ===================== 测试代码 =====================
 if __name__ == "__main__":
     print("\n" + "=" * 50)

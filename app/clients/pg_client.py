@@ -42,7 +42,6 @@ _DDL = [
         failed_stage TEXT,
         error_type TEXT,
         error_message TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
         chunk_count INTEGER NOT NULL DEFAULT 0,
         duration_ms BIGINT,
         started_at TIMESTAMP,

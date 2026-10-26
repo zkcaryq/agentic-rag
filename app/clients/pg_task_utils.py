@@ -93,26 +93,13 @@ def mark_finished(
         logger.warning(f"标记任务结束失败: {e}")
 
 
-def increment_retry(task_id: str) -> None:
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE import_tasks SET retry_count = retry_count + 1 WHERE task_id = %s",
-                    (task_id,),
-                )
-            conn.commit()
-    except Exception as e:
-        logger.warning(f"累加重试次数失败: {e}")
-
-
 def get_task(task_id: str) -> Dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT task_id, file_name, file_type, file_size, status, failed_stage,
-                       error_type, retry_count, chunk_count, duration_ms, started_at, finished_at
+                       error_type, chunk_count, duration_ms, started_at, finished_at
                   FROM import_tasks WHERE task_id = %s
                 """,
                 (task_id,),
@@ -121,8 +108,7 @@ def get_task(task_id: str) -> Dict[str, Any]:
     if not row:
         return {}
     keys = ["task_id", "file_name", "file_type", "file_size", "status", "failed_stage",
-            "error_type", "retry_count", "chunk_count", "duration_ms", "started_at",
-            "finished_at"]
+            "error_type", "chunk_count", "duration_ms", "started_at", "finished_at"]
     return dict(zip(keys, row))
 
 

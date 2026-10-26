@@ -98,9 +98,3 @@ def get_rerank_provider() -> RerankProvider:
 
     logger.info(f"Rerank provider={provider.name} model={rerank_provider_config.model}")
     return provider
-
-
-def reset_providers() -> None:
-    """测试或热切换配置后清空单例。"""
-    get_embedding_provider.cache_clear()
-    get_rerank_provider.cache_clear()

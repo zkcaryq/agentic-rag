@@ -11,7 +11,8 @@
 | --- | --- |
 | **云端真实环境已实测通过**（2026-10-26） | Zilliz Milvus（稠密 HNSW + 稀疏索引，`kb_chunks`）、百炼 `qwen3.7-text-embedding` 稠密1024+稀疏(nnz≈275)、`qwen3.7-text-rerank` 重排、HyDE、WebSearch（百炼 MCP `EnhancedSearch/search_pro`，单节点实测 10 条真结果）、PostgreSQL 17、Redis（含 RPUSH/BLPOP 跨进程探针）、RabbitMQ（导入队列实测 `dispatch=rabbitmq` 跑通）、OSS（写→签名URL读→删）、MinerU（真 PDF 全链路 31.4s 入库 5 切片、页码 1/1/4/5/6）、VLM 图片摘要（4 张图全部生成中文摘要）、切片 ID 端到端可溯源 |
 | 已有真实实现且本地可跑 | 解析入库、切分、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、断点续跑、评测框架、导入失败率埋点、TTFT/延迟指标、并发压测脚本 |
-| 代码就绪但**还没实测** | 查询侧 MQ 派发（`zhanggui.query.task` + worker + 跨进程 SSE）——本地演示档起不了第二个进程，需要在 Zilliz 环境跑一次；`reembed_existing.py` 不写 `import_tasks` 表，所以失败率统计只覆盖真实上传链 |
+| 已实测（2026-10-26 傍晚补） | 查询侧 MQ 派发端到端：`dispatch=rabbitmq` → worker 执行 → 15 个 progress + 8 个 delta + final 经 Redis 总线回到 API 进程再吐给 HTTP 客户端；多 worker 水平扩容对照（见第 3 节）；`/metrics` 跨进程合并 |
+| 代码就绪但**还没实测** | `reembed_existing.py` 不写 `import_tasks` 表，所以"导入失败率 <4%"仍只覆盖真实上传链，且样本量不够（4% 的分辨率下限约 100 次导入）；语料仍有 3 份 PDF 缺切分产物未入库 |
 | 需要你开一下 | **LangSmith**：开关/别名/自检都已接好（`check_infra` 会拿 key 真调一次 API），但工作区没有任何现成 key，要你去 smith.langchain.com 注册后填 `LANGCHAIN_API_KEY` |
 | 数字待回填 | 召回提升 38%、导入失败率 <4%、并发 TTFT —— 全量重灌跑完出数 |
 
@@ -73,8 +74,8 @@
 | 同步问答 + SSE 流式增量 | `POST /query` 非流式直接返回；流式先建队列再后台跑，`llm.stream` 逐 token 推 `delta` | `query_service.py`、`node_answer_output.py` |
 | 节点级进度跟踪协议 | `ready/progress/delta/final/error/close` + 节点中文名映射 | `app/utils/sse_utils.py`、`app/utils/task_utils.py` |
 | 前端实时观测链路 | 进度条 + `[N]` 引用高亮 + 来源列表（含页码/分数），所有文本做 HTML 转义 | `app/query_process/page/chat.html` |
-| TTFT / 延迟指标埋点 | 按 endpoint 分桶的滑动窗口（默认 200 样本），P50/P95/P99 线性插值；`query` 记整轮、`answer_generate` 记模型首 Token | `app/core/metrics.py:45`、`node_answer_output.py:203`、`query_service.py:109` |
-| 指标出口 | `GET /metrics` 返回窗口快照 + 当前派发模式（`rabbitmq` / `local_thread`） | `query_service.py`（`metrics_snapshot`） |
+| TTFT / 延迟指标埋点 | 按 endpoint 分桶的滑动窗口（默认 200 样本），P50/P95/P99 线性插值；`query` 记整轮、`answer_generate` 记模型首 Token；埋点后同步镜像样本到 Redis（`record_and_export`） | `app/core/metrics.py`、`node_answer_output.py:203`、`query_service.py` |
+| 指标出口 | `GET /metrics` 合并**本进程窗口 + Redis 里其它进程的样本**（排除自己 pid 防重复计数），并给出当前派发模式；实测 worker 执行的查询也能读到 `answer_generate ttft_p50=1008ms` | `query_service.py`（`metrics_snapshot`）、`clients/redis_utils.py`（`store_metrics/load_all_metrics`） |
 
 ### 2.4 异步任务调度与可用性
 
@@ -99,7 +100,7 @@
 | 召回准确率提升约 38% | **实测不成立，已按实测改口径。** 2026-10-26 在 Zilliz（82 份文档 / 4444 切片 / 72 条 golden set / K=5）四管线对照：`dense` Hit@5=0.8889 MRR=0.8072 NDCG@5=0.8274；`hybrid` 0.8889/0.8176/0.8353；`hyde` 0.8750/0.7979/0.8172；`full`(混合+HyDE+RRF+重排+断崖) **0.8889/0.8461/0.8568** | 召回被小语料顶满（dense 自己就 0.8889），**增益只在排序**：full 相对 dense 的 MRR +3.9 点（相对 +4.8%）、NDCG +2.9 点（相对 +3.6%）。所以那句要么改成"排序质量 MRR/NDCG 提升约 4%"，要么换更难的评测集；写 38% 一算就穿。复现：`python scripts/eval_retrieval.py --pipelines all --k 5`（约 20 分钟，rerank 需额度） |
 | 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py` | 需要真实跑够样本（4% 分辨率下限约 100 次导入） |
 | 图文混排文档入库 | 72 条 golden set 里 **19 条**专考图片/表格内容；chunk 正文里保留 `[图片：VLM 摘要]` | 可用 `scripts/check_golden.py` 自检 |
-| 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --duration 60`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | **实测有瓶颈，别吹高并发。** 演示档（无大模型）6 并发 12 轮：12/12 成功，TTFT P50 544ms / P95 1039ms。真实云端栈（百炼 LLM+embedding+联网，MQ worker 消费）4 并发 4 轮：4/4 成功但 **TTFT P50 53.3s**、吞吐 0.04 轮/秒；6 并发 12 轮全失败（6 个 error 事件 + 5 个 60s 读流超时）。原因两个且互相独立：① 查询 worker 是单进程 + prefetch=1 串行消费，N 个请求就是 N 倍排队时长，要并发得**多开 worker**（部署层水平扩容，0 代码改动）；② 当时百炼 rerank 免费额度耗尽（403 `AllocationQuota.FreeTierOnly`），节点按设计降级成 RRF 顺序、答案照常产出。**这句在扩容之前只能写成"查询任务队列化、可水平扩容的多 consumer 并发"，不能写"支撑高并发"** |
+| 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --total M`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | **实测（真实云端栈，查询走 MQ）：** 1 worker × 4并发4轮 → 4/4 成功，TTFT P50 **53.3s**，0.04 轮/秒；3 worker × 同一负载 → 4/4，P50 **20.3s**，0.08 轮/秒；3 worker × 6并发12轮 → **12/12**，P50 23.7s，0.17 轮/秒。诚实边界：6 并发那轮此前是 0/12 全失败，这次修复同时改了两个变量（百炼额度充值 + worker 从 1 加到 3），不能把功劳全算给扩容。另有 `GET /metrics`：worker 样本经 Redis `rag:metrics:{pid}` 镜像后由 API 进程合并，实测同时给出 `answer_generate ttft_p50=1008ms`（模型侧）与客户端 `TTFT P50=18.5s`，差值即检索+联网+排队。**所以这句写"查询队列化 + 多 consumer 水平扩容 + TTFT 跨进程可观测"站得住，写"高并发/低延迟"站不住**（单查询端到端仍是十几到几十秒） |
 
 ---
 

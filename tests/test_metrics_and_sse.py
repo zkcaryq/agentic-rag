@@ -62,6 +62,50 @@ def test_window_size_caps_bucket(monkeypatch):
     assert metrics.snapshot()["query"]["count"] == 3
 
 
+def test_snapshot_merges_remote_samples():
+    """多进程合并：worker 镜像回来的样本要和本进程窗口一起算分位数。"""
+    metrics.record("query", total_ms=100.0)
+    raw = metrics.dump_samples()
+    metrics.reset()
+
+    metrics.record("query", total_ms=300.0)
+    merged = metrics.snapshot(extra=metrics.load_samples(raw))
+    assert merged["query"]["count"] == 2
+    assert merged["query"]["total_p50"] == 200.0
+
+
+def test_dump_load_roundtrip_keeps_ttft_and_tokens():
+    metrics.record("answer_generate", ttft_ms=120.5, total_ms=800.0, tokens=42)
+    restored = metrics.load_samples(metrics.dump_samples())
+    sample = restored["answer_generate"][0]
+    assert (sample.ttft_ms, sample.total_ms, sample.tokens) == (120.5, 800.0, 42)
+
+
+def test_record_and_export_without_redis_is_safe(monkeypatch):
+    """没开 Redis 时导出只是 no-op，不能把埋点本身炸掉（单测环境必须能裸跑）。"""
+    from app.clients import redis_utils
+
+    monkeypatch.setattr(metrics.infra_config_metrics, "enabled", True)
+    monkeypatch.setattr(redis_utils, "is_enabled", lambda: False)
+    monkeypatch.setattr(redis_utils, "store_metrics", lambda *a: False)
+    metrics.record_and_export("query", total_ms=50.0)
+    assert metrics.snapshot()["query"]["count"] == 1
+
+
+def test_export_sends_samples_to_bus(monkeypatch):
+    """导出送出去的必须是本窗口的样本，否则 /metrics 合并不到东西。"""
+    from app.clients import redis_utils
+
+    sent = {}
+    monkeypatch.setattr(metrics.infra_config_metrics, "enabled", True)
+    monkeypatch.setattr(redis_utils, "is_enabled", lambda: True)
+    monkeypatch.setattr(
+        redis_utils, "store_metrics", lambda pid, raw: sent.update(pid=pid, raw=raw) or True
+    )
+    metrics.record_and_export("answer_generate", ttft_ms=10.0, total_ms=90.0, tokens=5)
+    assert sent["raw"]["answer_generate"] == [[10.0, 90.0, 5]]
+
+
 # ==================== SSE 传输通道 ====================
 def test_push_goes_to_local_queue_by_default():
     session_id = "s-local"

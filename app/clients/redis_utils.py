@@ -121,6 +121,54 @@ def clear_events(session_id: str) -> None:
         logger.warning(f"清理 SSE 事件失败 {session_id}: {e}")
 
 
+# ---------------------------------------------------------------------------
+# 跨进程指标镜像（rag:metrics:{pid}）
+#
+# TTFT 窗口活在各自进程里：查询走 MQ 时样本记在 worker，API 进程的 /metrics
+# 读不到。worker 每次做完查询把自己的样本 dump 进来，接口读取时合并所有进程。
+# ---------------------------------------------------------------------------
+
+
+def store_metrics(pid: int, raw: dict) -> bool:
+    client = get_redis()
+    if client is None:
+        return False
+    import json
+
+    try:
+        client.set(key("metrics", str(pid)), json.dumps(raw, ensure_ascii=False), ex=ttl_seconds())
+        return True
+    except Exception as e:
+        logger.warning(f"写入指标快照失败: {e}")
+        return False
+
+
+def load_all_metrics(exclude_pid: int | None = None) -> dict:
+    """读回所有进程 dump 出来的样本，合并成 {endpoint: [样本...]}。
+
+    exclude_pid：本进程自己的镜像 key 要跳过，否则本地窗口 + Redis 会重复计数。
+    """
+    client = get_redis()
+    if client is None:
+        return {}
+    import json
+
+    skip = key("metrics", str(exclude_pid)) if exclude_pid else None
+    merged: dict[str, list] = {}
+    try:
+        for metric_key in client.scan_iter(match=key("metrics", "*"), count=100):
+            if skip and metric_key == skip:
+                continue
+            payload = client.get(metric_key)
+            if not payload:
+                continue
+            for endpoint, rows in json.loads(payload).items():
+                merged.setdefault(endpoint, []).extend(rows)
+    except Exception as e:
+        logger.warning(f"读取指标快照失败: {e}")
+    return merged
+
+
 _blocking_client = None
 
 

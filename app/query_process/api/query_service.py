@@ -114,7 +114,7 @@ async def query(request: QueryRequest):
     if not request.is_stream:
         started = time.monotonic()
         final_state = query_app.invoke(init_state)
-        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
+        metrics.record_and_export(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         return {
             "code": 200,
             "session_id": session_id,
@@ -143,7 +143,7 @@ def _run_query_async(state, session_id: str) -> None:
     started = time.monotonic()
     try:
         query_app.invoke(state)
-        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
+        metrics.record_and_export(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         update_task_status(session_id, "completed", push_queue=True)
     except Exception as e:
         logger.exception(f"[{session_id}] 查询失败: {e}")
@@ -226,15 +226,17 @@ async def query_result(session_id: str):
 async def metrics_snapshot():
     """TTFT / 总延迟滑动窗口快照。
 
-    窗口是进程内的：MQ 派发出去的查询样本记在 worker 进程，这里看不到。
-    要端到端的并发数字请用 scripts/bench_concurrency.py（客户端口径，跨进程都算）。
+    窗口本身是进程内的，但 worker 每次记完样本会镜像到 Redis `rag:metrics:{pid}`，
+    这里把它们和本进程窗口合并后一起算分位数——MQ 派发部署下接口照样能看到全局数字。
+    排除自己的 pid，避免本地窗口与 Redis 镜像重复计数。
     """
+    remote = metrics.load_samples(redis_utils.load_all_metrics(exclude_pid=os.getpid()))
     return {
         "code": 200,
-        "scope": "本进程窗口，不含 worker 进程的样本",
+        "scope": "本进程窗口 + Redis 里其它进程的样本",
         "window_enabled": infra_config_metrics.enabled,
         "query_dispatch": "rabbitmq" if _mq_dispatch_enabled() else "local_thread",
-        "endpoints": metrics.snapshot(),
+        "endpoints": metrics.snapshot(extra=remote),
     }
 
 

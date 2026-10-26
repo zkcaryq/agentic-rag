@@ -54,11 +54,11 @@ def execute_query(session_id: str, query_text: str, is_stream: bool = True) -> d
     started = time.monotonic()
     try:
         final_state = query_app.invoke(state)
-        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
+        metrics.record_and_export(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         update_task_status(session_id, "completed", push_queue=True)
         return {"status": "completed", "answer": final_state.get("answer", "")}
     except Exception as e:
-        metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
+        metrics.record_and_export(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         logger.exception(f"[{session_id}] worker 执行查询失败: {e}")
         set_task_result(session_id, "error", str(e))
         update_task_status(session_id, "failed", push_queue=True)

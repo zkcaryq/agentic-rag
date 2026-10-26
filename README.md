@@ -182,7 +182,12 @@ docs/         RESUME-ALIGNMENT.md（简历逐条对照）、rag-eval.md（评测
 - 断点续跑只覆盖解析阶段，向量化与入库会重跑（向量不落 Redis）；
 - Milvus Lite 为单进程文件锁，问答服务与导入服务不能同时启动；
 - 查询走 MQ 需要两样同时具备：RabbitMQ 派活 + Redis 事件总线回传，缺一个就退回线程池；
-  而且 worker 与 API 进程要能**共享同一个向量库**，Milvus Lite 本地档做不到，
-  所以「MQ 派发查询 + 跨进程 SSE」这条链路目前只有代码与单测，等 Zilliz + Redis 凭据到位才能实测；
-- `GET /metrics` 的窗口是**进程内**的：派发到 worker 的查询样本记在 worker 进程里，
-  HTTP 侧读不到。要端到端的并发数字用 `scripts/bench_concurrency.py`（客户端计时，跨进程都算得到）。
+  worker 与 API 进程还要能**共享同一个向量库**（Milvus Lite 的单进程文件锁做不到，
+  所以这条链路只在 Zilliz 配置下成立）。已在 Zilliz 环境实测通过：`dispatch=rabbitmq`，
+  progress/delta/final 经 `rag:sse:{sid}:events` 回到 API 进程再吐给客户端；
+- **查询 worker 是单进程串行消费**（prefetch=1），并发靠多开 worker 进程水平扩容。
+  实测 4 并发同负载：1 worker TTFT P50 53.3s / 0.04 轮秒，3 worker 20.3s / 0.08 轮秒。
+  单查询端到端仍在十几到几十秒量级，别把它说成"低延迟高并发"；
+- `GET /metrics` 的窗口是进程内的，但 worker 每次记完样本会镜像到 `rag:metrics:{pid}`，
+  接口读取时合并所有进程（排除自身 pid 防重复计数），所以 MQ 派发下仍能看到全局 TTFT。
+  端到端的用户感知延迟请用 `scripts/bench_concurrency.py`（客户端计时）交叉验证。

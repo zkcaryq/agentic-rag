@@ -200,7 +200,7 @@ def _generate(
     if not is_stream:
         response = llm.invoke(prompt)
         answer = (response.content or "").strip()
-        metrics.record(
+        metrics.record_and_export(
             GENERATE_ENDPOINT,
             total_ms=(time.monotonic() - t0) * 1000,
             tokens=estimate_tokens(answer),
@@ -226,7 +226,7 @@ def _generate(
             return answer, "extractive"
 
     answer = "".join(parts).strip()
-    metrics.record(
+    metrics.record_and_export(
         GENERATE_ENDPOINT,
         total_ms=(time.monotonic() - t0) * 1000,
         ttft_ms=ttft_ms,

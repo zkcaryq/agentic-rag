@@ -19,6 +19,26 @@ MAX_KEEP = 8          # 上限，避免上下文被撑爆
 FALLBACK_FLOOR = 0.15  # 阈值过严导致一条不剩时，退一步保底取 2 条的软下限
 
 
+def build_rerank_text(doc: dict) -> str:
+    """交给 Cross-Encoder 的打分文本：切片所属手册 + 所属章节 + 正文。
+
+    只喂正文会让重排模型看不见"这段属于哪台设备"，而不同型号手册里同一段操作
+    写得几乎一样。实测它会「MateBook B3-420 电池保养」把擎云 HM940 排到第一
+    (0.858)、「大象系列双面复印」把 Z35 手册排到第一 (0.970)——身份不在输入里，
+    模型只能按话题相似度排，于是把精确命中的手册挤掉。
+    """
+    head = " / ".join(
+        part
+        for part in (
+            doc.get("product_name") or doc.get("file_title") or "",
+            doc.get("parent_title") or doc.get("title") or "",
+        )
+        if part
+    )
+    content = doc.get("content") or ""
+    return f"{head}\n{content}" if head else content
+
+
 def node_rerank(state: QueryGraphState) -> QueryGraphState:
     """重排序节点"""
     func_name = sys._getframe().f_code.co_name
@@ -43,7 +63,7 @@ def node_rerank(state: QueryGraphState) -> QueryGraphState:
         from app.lm.provider_factory import get_rerank_provider
 
         provider = get_rerank_provider()
-        documents = [chunk.get("content", "") for chunk in rrf_chunks]
+        documents = [build_rerank_text(chunk) for chunk in rrf_chunks]
         ranked = provider.rerank(query, documents, top_n=len(documents))
         if not ranked:
             raise RuntimeError("重排供应商返回空结果")

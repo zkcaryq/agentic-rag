@@ -91,13 +91,17 @@ def _fuse(result_lists: List[List[Dict[str, Any]]], k: int = 60) -> List[Dict[st
 
 
 def _rerank(query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    from app.query_process.agent.nodes.node_rerank import select_by_cliff
+    from app.query_process.agent.nodes.node_rerank import (
+        build_rerank_text,
+        select_by_cliff,
+    )
 
     if not documents:
         return []
     provider = get_rerank_provider()
+    # 与线上 node_rerank 用同一套打分文本（含手册身份），否则评测结论和生产行为不一致
     ranked = provider.rerank(
-        query, [doc.get("content", "") for doc in documents], top_n=len(documents)
+        query, [build_rerank_text(doc) for doc in documents], top_n=len(documents)
     )
     if not ranked:
         return documents

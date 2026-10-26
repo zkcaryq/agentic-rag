@@ -1,6 +1,10 @@
 """
-PDF转Markdown节点
-利用 MinerU API 将 PDF 转换为结构化的 Markdown 格式
+MinerU 解析节点
+把 PDF / Word / Excel 交给 MinerU 云端 API 转成结构化 Markdown。
+
+文件名仍叫 node_pdf_to_md（图节点名，改动会牵动断点快照里的节点名），
+但职责不止 PDF：实测 MinerU 也收 .docx/.xlsx 并返回 Markdown（表格为 <table> HTML）。
+Office 走不走 MinerU 由 OFFICE_PARSE_ENGINE 控制，见 app/conf/mineru_config.py。
 """
 import os
 import sys
@@ -67,8 +71,19 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
             logger.error(f"【{func_name}】读取MD文件失败: {e}")
 
     except Exception as e:
+        target = Path(state.get("pdf_path") or state.get("local_file_path", ""))
+        if target.suffix.lower() in (".docx", ".xlsx") and mineru_config.office_fallback_native:
+            # Word/Excel 本地解析器兜得住，退一步比整单失败强（PDF 没有本地兜底，照旧抛出）。
+            # failed_stage 记成 mineru_fallback：任务算"部分成功"，不混进失败率分母，
+            # 但降级这件事在统计里看得见。
+            logger.exception(f"【{func_name}】MinerU 解析 Office 失败，退回本地解析器: {e}")
+            state["failed_stage"] = "mineru_fallback"
+            from app.import_process.agent.nodes.node_office_to_md import node_office_to_md
+
+            return node_office_to_md(state)
+
         state["failed_stage"] = "mineru"
-        logger.exception(f"【{func_name}】PDF转MD失败: {e}")
+        logger.exception(f"【{func_name}】MinerU 解析失败: {e}")
         raise
 
     finally:
@@ -79,12 +94,16 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
 
 
 def step_1_validate_paths(state: ImportGraphState):
-    """步骤1：校验PDF路径和输出目录"""
-    pdf_path = state.get("pdf_path", "")
+    """步骤1：校验待解析文件路径和输出目录。
+
+    这里的"文件"不一定是 PDF：Office 文件默认也走 MinerU（实测它收 docx/xlsx），
+    而 node_entry 只给 PDF 设 `pdf_path`，所以取不到时回退到 `local_file_path`。
+    """
+    pdf_path = state.get("pdf_path") or state.get("local_file_path", "")
     local_dir = state.get("local_dir", "")
 
     if not pdf_path:
-        raise ValueError("PDF路径为空")
+        raise ValueError("待解析文件路径为空")
     if not local_dir:
         raise ValueError("输出目录为空")
 
@@ -92,7 +111,7 @@ def step_1_validate_paths(state: ImportGraphState):
     output_dir_obj = Path(local_dir)
 
     if not pdf_path_obj.exists():
-        raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
+        raise FileNotFoundError(f"待解析文件不存在: {pdf_path}")
 
     output_dir_obj.mkdir(parents=True, exist_ok=True)
 

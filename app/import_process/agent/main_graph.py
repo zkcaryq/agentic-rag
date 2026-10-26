@@ -19,6 +19,7 @@ from app.import_process.agent.nodes.node_md_img import node_md_img
 from app.import_process.agent.nodes.node_document_split import node_document_split
 from app.import_process.agent.nodes.node_product_name_recognition import node_product_name_recognition
 from app.import_process.agent.nodes.node_office_to_md import node_office_to_md
+from app.conf.mineru_config import mineru_config
 from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding
 from app.import_process.agent.nodes.node_import_milvus import node_import_milvus
 from app.utils.task_utils import is_node_done, save_checkpoint
@@ -91,6 +92,11 @@ def create_import_graph():
         if state.get("is_pdf_read_enabled"):
             return "node_pdf_to_md"
         if state.get("is_office_read_enabled"):
+            # 默认让 Office 也走 MinerU，与简历"基于 MinerU 完成 PDF/Word/Excel 解析转换"
+            # 对齐；OFFICE_PARSE_ENGINE=native 切回本地解析器（零凭据演示档就是这么设的），
+            # MinerU 失败时节点内部还会自动兜一次本地解析
+            if mineru_config.office_parse_engine == "mineru":
+                return "node_pdf_to_md"
             return "node_office_to_md"
         if state.get("is_md_read_enabled"):
             return "node_md_img"

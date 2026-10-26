@@ -44,8 +44,8 @@
 
 | 简历表述 | 实现 | 位置 |
 | --- | --- | --- |
-| MinerU 完成 PDF 解析 | 调 MinerU 云端 API，**去掉了三级 mock 造假**（配置缺失/异常/下载失败一律失败并记 `failed_stage=mineru`） | `node_pdf_to_md.py:105` |
-| Word / Excel 解析 | python-docx 保留标题层级与表格；openpyxl 保留 sheet 名与行号 | `node_office_to_md.py` |
+| MinerU 完成 PDF/Word/Excel 解析 | 调 MinerU v4 云端接口，**PDF 与 Office 同一条路**（实测 MinerU 收 `.docx`/`.xlsx` 并返回 Markdown，表格是 `<table>` HTML）；**去掉了三级 mock 造假**（配置缺失/异常/下载失败一律如实记 `failed_stage=mineru`） | `node_pdf_to_md.py`、`main_graph.route_after_entry` |
+| Office 解析引擎可切换 + 降级 | `OFFICE_PARSE_ENGINE=mineru|native`：默认 mineru；MinerU 挂了自动退回本地解析器并记 `failed_stage=mineru_fallback`（任务算 partial_success，不混进失败率分母）；PDF 没有本地兜底，照旧失败。`native` 用 python-docx 保标题层级/表格、openpyxl 保 sheet 名与行号，零凭据演示档用它 | `conf/mineru_config.py`、`node_pdf_to_md.py` 的 except 分支、`node_office_to_md.py` |
 | 图片资源解耦持久化 | 抽图 → 上传 → 正文只写 `storage_key`，取图走 `/media/{key}`（本地档读文件，OSS 档 302 签名 URL） | `node_md_img.py`、`clients/storage.py` |
 | VLM 生成图片文本摘要 | 单张图 → 上文/下文 → VLM 摘要 → 写回 Markdown 图片标题 | `node_md_img.py:157` |
 | 标题分层切分 | 按 `#{1,6}` 切分 | `node_document_split.py:95` |
@@ -168,15 +168,17 @@ python app/import_process/worker.py     # 消费 zhanggui.import.task
 | BGE-M3 生成稠密+稀疏双向量 | 百炼 `qwen3.7-text-embedding` 生成稠密(1024)+稀疏双向量 | 只有百炼原生接口支持稀疏输出，实测稀疏 nnz≈275；BGE-M3 本机跑不了（torch DLL 坏），换 SiliconFlow 又出不了稀疏 |
 | Cross-Encoder 重排序 | 补上模型名：百炼 `qwen3.7-text-rerank`（Cross-Encoder） | 现在能报出具体供应商，实测 top1 0.572 |
 | 电商业务文档 | 图文混排的设备/产品手册类文档 | 语料实际是 85 份 3C 设备手册 |
-| **基于 MinerU 完成 PDF/Word/Excel 解析** | **基于 MinerU 完成 PDF 版面解析（含图表与页码定位），Word/Excel 由 python-docx/openpyxl 保留标题层级与表格结构，统一转 Markdown 后进入切分链路** | MinerU 只处理 PDF；Word/Excel 走的是本地结构化解析器。原句会被追问"MinerU 怎么解析 xlsx" |
+| **基于 MinerU 完成 PDF/Word/Excel 解析** | **不用改了，这句现在是事实**（2026-10-26 实测：`probe_p3030_manual.docx` / `probe_p3030_spec.xlsx` 走 MinerU 出 Markdown，端到端 10.4s / 8.8s；MinerU 不可用时自动退回本地解析器，任务记 partial_success） |
+  面试要能讲两点：① Office 为什么能给 MinerU（实测接口收，返回 `<table>` HTML 表格）；② 为什么还留着 python-docx/openpyxl（零凭据演示档用它，且 MinerU 挂了要有兜底，本地表格转 Markdown 更干净、Excel 还保留行号可溯源）。旧行原因（MinerU 只处理 PDF）已被实测推翻 |
 | 技术栈里的 LangSmith | 要么填上 key 真开起来，要么从技术栈里去掉 | 目前 `enabled=false`，简历写"链路观测"却没有 trace 截图撑腰，不如不开 |
 
 可直接粘贴的两句（与代码一一对应）：
 
 ```
-- 基于 MinerU 云端 API 完成 PDF 版面解析与图片/表格抽取，Word、Excel 分别用 python-docx、
-  openpyxl 保留标题层级与表格结构，统一转 Markdown 进入切分链路；图片解耦上传私有 OSS，
-  正文仅存 storage_key，取图走签名 URL，并由 VLM 生成图片文本摘要使图内信息可检索。
+- 基于 MinerU 云端 API 统一完成 PDF / Word / Excel 的解析转换（含图片与表格抽取），
+  并以 python-docx / openpyxl 作为本地降级引擎（MinerU 不可用时自动接管，任务标记
+  partial_success 而非失败）；解析产物统一转 Markdown 进入切分链路，图片解耦上传私有
+  OSS，正文仅存 storage_key、取图走签名 URL，并由 VLM 生成图片文本摘要使图内信息可检索。
 - 通过百炼 qwen3.7-text-embedding 生成稠密(1024)+稀疏双向量写入 Milvus(Zilliz Cloud)，
   以 HNSW + SPARSE_INVERTED_INDEX 双索引支撑混合检索。
 ```

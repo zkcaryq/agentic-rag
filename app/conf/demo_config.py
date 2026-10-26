@@ -35,6 +35,8 @@ def configure_demo_env() -> dict:
         "PG_ENABLED": "false",
         "REDIS_ENABLED": "false",
         "RABBITMQ_ENABLED": "false",
+        # 演示档没有任何凭据，Office 只能走本地解析器（生产默认是 mineru）
+        "OFFICE_PARSE_ENGINE": "native",
         "LANGCHAIN_TRACING_V2": "false",
         "LOG_CONSOLE_LEVEL": "WARNING",
         "LOG_FILE_ENABLE": "false",

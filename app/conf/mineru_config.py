@@ -13,6 +13,20 @@ load_dotenv()
 class MineruConfig:
     base_url: str
     api_key : str
+    # Office 文件走哪条解析路：mineru（默认，与简历"基于 MinerU 完成 PDF/Word/Excel
+    # 解析转换"一致，实测 MinerU 收 docx/xlsx 并返回 Markdown+HTML 表格）
+    # 或 native（python-docx / openpyxl，零网络、表格转 Markdown 更干净、保留 Excel 行号）
+    office_parse_engine: str
+    # MinerU 失败时是否退回本地解析器：Word/Excel 本地能解，退一步比整单失败好；
+    # PDF 没有本地兜底，仍然如实报错。
+    office_fallback_native: bool
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 def _mineru_base_url() -> str:
     """归一化成 API 根地址。
@@ -30,5 +44,7 @@ def _mineru_base_url() -> str:
 
 mineru_config = MineruConfig(
     base_url=_mineru_base_url(),
-    api_key=os.getenv("MINERU_API_TOKEN")
+    api_key=os.getenv("MINERU_API_TOKEN"),
+    office_parse_engine=(os.getenv("OFFICE_PARSE_ENGINE") or "mineru").strip().lower(),
+    office_fallback_native=_env_bool("OFFICE_PARSE_FALLBACK_NATIVE", True),
 )

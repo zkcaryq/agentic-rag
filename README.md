@@ -134,6 +134,7 @@ python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
 | 向量库 | Milvus / Zilliz Cloud | Milvus Lite（单文件） |
 | 向量 | 百炼 `text-embedding-v4`（稠密+稀疏） | `lexical`（Hashing TF，无 torch/onnx 依赖） |
 | 重排 | `gte-rerank-v2` | `none`（保留 RRF 顺序） |
+| Office 解析 | MinerU（`OFFICE_PARSE_ENGINE=mineru`，与 PDF 同一条路，失败退回本地解析器） | `native`：python-docx / openpyxl，零凭据 |
 | 图片存储 | 阿里云 OSS | 本地 `output/demo/storage` |
 | 会话历史 | PostgreSQL | SQLite |
 | 消息队列 | RabbitMQ（导入 / 查询各一条队列） | 关闭，导入与查询都退回进程内线程 |

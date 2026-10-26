@@ -6,6 +6,19 @@ from app.core.logger import logger
 # 全局Milvus客户端实例，实现单例复用
 _milvus_client = None
 
+# 检索/回捞必须带回的核心切片字段。
+# 混合检索的默认字段曾经只有 product_name，于是"切片级溯源"只在有稀疏向量时失效
+# （纯稠密路径字段是齐的），三个默认值分开写就是这么埋的雷，统一引用这一个常量。
+CORE_OUTPUT_FIELDS = [
+    "biz_chunk_id",
+    "content",
+    "title",
+    "parent_title",
+    "file_title",
+    "product_name",
+    "page_no",
+]
+
 
 # 已确认加载过的集合（Milvus Lite / Milvus 都需要 load 才能 query/search）
 _loaded_collections: set[str] = set()
@@ -23,6 +36,10 @@ def ensure_collection_loaded(client, collection_name: str) -> None:
     if collection_name in _loaded_collections:
         return
     try:
+        # 集合还不存在时先退掉：直接 load 会让 pymilvus 自己打一整段
+        # "collection not found" 的 traceback，首次建库时看着像故障
+        if collection_name not in client.list_collections():
+            return
         client.load_collection(collection_name=collection_name)
         _loaded_collections.add(collection_name)
         logger.info(f"集合 {collection_name} 已加载")
@@ -119,15 +136,7 @@ def fetch_chunks_by_chunk_ids(
         return []
     # 默认返回字段：核心切片标识与内容字段（含业务切片 ID、页码，供逐段溯源）
     if output_fields is None:
-        output_fields = [
-            "biz_chunk_id",
-            "content",
-            "title",
-            "parent_title",
-            "file_title",
-            "product_name",
-            "page_no",
-        ]
+        output_fields = list(CORE_OUTPUT_FIELDS)
 
     # 转换ID为INT64类型，分离有效/无效ID
     ok_ids, bad_ids = _coerce_int64_ids(chunk_ids)
@@ -220,9 +229,9 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
         # norm_score=True：先将两个向量评分归一化到0~1区间，再加权计算
         rerank = WeightedRanker(ranker_weights[0], ranker_weights[1], norm_score=norm_score)
 
-        # 默认返回字段：文档标识字段
+        # 默认返回字段：与纯稠密一致，保证溯源字段不丢
         if output_fields is None:
-            output_fields = ["product_name"]
+            output_fields = list(CORE_OUTPUT_FIELDS)
 
         # 执行混合搜索：融合稠密+稀疏向量结果，按权重重新排序
         res = client.hybrid_search(
@@ -266,15 +275,7 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
     ensure_collection_loaded(client, collection_name)
     try:
         if output_fields is None:
-            output_fields = [
-                "biz_chunk_id",
-                "content",
-                "title",
-                "parent_title",
-                "file_title",
-                "product_name",
-                "page_no",
-            ]
+            output_fields = list(CORE_OUTPUT_FIELDS)
         res = client.search(
             collection_name=collection_name,
             data=[dense_vector],

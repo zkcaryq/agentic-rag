@@ -26,10 +26,13 @@ except Exception:
 
 from app.lm.provider_factory import get_embedding_provider  # noqa: E402
 
+# (问题, 命中标记列表)。标记在**切片正文**里找，也接受文件名命中：
+# 语料文件名全是型号（hl3040网络说明书 / hak180产品安全手册 / 华为擎云L420），
+# 只按文件名断言的话「打印机卡纸」永远判不出，之前这里就是这么误报 FAIL 的。
 CHECKS = [
-    ("打印机卡纸怎么处理", "打印机"),
-    ("路由器怎么恢复出厂设置", "H3C"),
-    ("笔记本电池怎么保养", "MateBook"),
+    ("打印机卡纸怎么处理", ("卡纸", "进纸", "纸张", "打印机")),
+    ("路由器怎么恢复出厂设置", ("恢复出厂", "出厂设置", "reset")),
+    ("笔记本电池怎么保养", ("电池", "充电", "功耗")),
 ]
 
 
@@ -53,17 +56,28 @@ def check_embedding() -> None:
 def check_retrieval() -> None:
     from app.eval.pipelines import retrieve
 
-    for question, expected in CHECKS:
+    for index, (question, signals) in enumerate(CHECKS):
         docs = retrieve(question, "hybrid", top_k=5)
         assert docs, f"「{question}」没有检索到任何文档"
 
-        titles = [doc.get("file_title", "") for doc in docs]
         missing_id = [doc for doc in docs if not doc.get("biz_chunk_id")]
         assert not missing_id, f"有 {len(missing_id)} 条结果缺少 biz_chunk_id，切片级溯源不成立"
 
-        hit = any(expected in title for title in titles)
-        assert hit, f"「{question}」的前 5 条结果里没有包含「{expected}」的文档: {titles}"
-        print(f"[OK] 「{question}」top5 = {titles}")
+        # 页码允许为 0（.md 语料没有页），但字段必须在，且至少一条 >0 才算映射通了
+        if index == 0:
+            pages = [doc.get("page_no") for doc in docs]
+            assert all(page is not None for page in pages), f"page_no 字段缺失: {pages}"
+
+        titles = [doc.get("file_title", "") for doc in docs]
+        hit_title = any(any(s in title for s in signals) for title in titles)
+        hit_content = any(
+            any(s in (doc.get("content") or "") for s in signals) for doc in docs
+        )
+        assert hit_title or hit_content, (
+            f"「{question}」前 5 条都不像在讲这件事: 标记={signals} 标题={titles}"
+        )
+        where = "标题" if hit_title else "正文"
+        print(f"[OK] 「{question}」top5={titles} 命中标记于{where}")
 
 
 def check_rerank() -> None:

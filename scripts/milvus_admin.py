@@ -45,7 +45,11 @@ def show_stats(client, collection: str) -> None:
 
     try:
         rows = client.query(
-            collection_name=collection, filter="", output_fields=["count(*)"]
+            # Zilliz 上 filter="" 的 count 会返回 0（空过滤不被支持），
+            # 必须用恒真的主键条件才拿得到真实行数
+            collection_name=collection,
+            filter="chunk_id > 0",
+            output_fields=["count(*)"],
         )
         print(f"实体数: {rows}")
     except Exception as e:

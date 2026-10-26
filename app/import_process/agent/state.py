@@ -82,27 +82,3 @@ def create_default_state(**overrides) -> ImportGraphState:
     state = get_default_state()
     state.update(overrides)
     return state
-
-
-# ==================== 测试代码 ====================
-if __name__ == "__main__":
-    print("=" * 50)
-    print("测试导入流程状态定义")
-    print("=" * 50)
-
-    # 测试创建默认状态
-    state = get_default_state()
-    print(f"默认状态: {state}")
-
-    # 测试创建带参数的状态
-    test_state = create_default_state(
-        task_id="test_001",
-        local_file_path="doc/hak180.pdf",
-        is_pdf_read_enabled=True
-    )
-    print(f"\n测试状态:")
-    print(f"  - task_id: {test_state['task_id']}")
-    print(f"  - local_file_path: {test_state['local_file_path']}")
-    print(f"  - is_pdf_read_enabled: {test_state['is_pdf_read_enabled']}")
-
-    print("\n✅ 状态定义测试通过")

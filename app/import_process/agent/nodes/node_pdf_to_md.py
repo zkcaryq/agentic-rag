@@ -260,34 +260,3 @@ def step_3_download_and_extract(zip_url: str, output_dir_obj: Path, pdf_stem: st
     # 曾经这里会写一段假的 "这是从PDF转换而来的Markdown内容"，导致入库的是占位文本。
     # 现在找不到 MD 就直接失败，宁可让导入任务记失败，也不制造假数据。
     raise RuntimeError(f"未在 MinerU 结果包中找到 Markdown 文件: {zip_url}")
-
-
-# ==================== 测试代码 ====================
-if __name__ == "__main__":
-    from app.utils.path_util import PROJECT_ROOT
-
-    print("\n" + "=" * 50)
-    print("测试 node_pdf_to_md 节点")
-    print("=" * 50)
-
-    # 创建测试状态
-    test_state = {
-        "task_id": "test_pdf2md_001",
-        "pdf_path": str(PROJECT_ROOT / "doc" / "hak180产品安全手册.pdf"),
-        "local_dir": str(PROJECT_ROOT / "output"),
-        "is_stream": False
-    }
-
-    # 确保目录存在
-    Path(test_state["local_dir"]).mkdir(parents=True, exist_ok=True)
-
-    try:
-        result = node_pdf_to_md(test_state)
-        print(f"\n✅ 测试完成")
-        print(f"   MD路径: {result.get('md_path')}")
-        print(f"   MD内容长度: {len(result.get('md_content', ''))} 字符")
-        print(f"   MD内容预览:\n{result.get('md_content', '')[:200]}...")
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        import traceback
-        traceback.print_exc()

@@ -75,22 +75,3 @@ def create_default_query_state(**overrides) -> QueryGraphState:
     state = get_default_query_state()
     state.update(overrides)
     return state
-
-
-# ==================== 测试代码 ====================
-if __name__ == "__main__":
-    print("=" * 50)
-    print("测试检索流程状态定义")
-    print("=" * 50)
-
-    state = create_default_query_state(
-        session_id="test_session_001",
-        original_query="万用表怎么用？",
-        is_stream=True
-    )
-
-    print(f"session_id: {state['session_id']}")
-    print(f"original_query: {state['original_query']}")
-    print(f"is_stream: {state['is_stream']}")
-
-    print("\n✅ 检索状态定义测试通过")

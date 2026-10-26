@@ -247,10 +247,3 @@ def _save_import_result(state: ImportGraphState, chunks: List[Dict]):
         logger.info(f"入库结果已保存: {result_path}")
     except Exception as e:
         logger.warning(f"保存入库结果失败: {e}")
-
-
-# ==================== 测试代码 ====================
-if __name__ == "__main__":
-    print("=" * 50)
-    print("node_import_milvus 模块")
-    print("=" * 50)

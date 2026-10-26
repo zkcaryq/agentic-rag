@@ -108,23 +108,3 @@ def create_query_graph():
 
 # 全局应用实例
 query_app = create_query_graph()
-
-
-if __name__ == "__main__":
-    print("=" * 50)
-    print("检索流程图已创建")
-    print("节点顺序:")
-    print("  node_product_confirm")
-    print("      ↓")
-    print("  node_multi_search")
-    print("      ↓")
-    print("  node_search_embedding")
-    print("      ↓")
-    print("  node_search_embedding_hyde")
-    print("      ↓")
-    print("  node_web_search_mcp")
-    print("      ↓")
-    print("  node_join")
-    print("      ↓")
-    print("  node_rrf → node_rerank → node_answer_output")
-    print("=" * 50)

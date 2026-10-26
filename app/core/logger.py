@@ -90,17 +90,3 @@ except Exception as e:
 
 
 # 导出便捷函数
-# ===================== 测试代码 =====================
-if __name__ == "__main__":
-    print("\n" + "=" * 50)
-    print("测试日志模块")
-    print("=" * 50)
-
-    logger.debug("这是 DEBUG 级别日志")
-    logger.info("这是 INFO 级别日志")
-    logger.warning("这是 WARNING 级别日志")
-    logger.error("这是 ERROR 级别日志")
-
-    print("\n" + "=" * 50)
-    print(f"日志文件目录: {LOG_DIR}")
-    print("=" * 50)

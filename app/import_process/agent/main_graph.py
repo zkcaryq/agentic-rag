@@ -123,7 +123,3 @@ def create_import_graph():
 
 
 kb_import_app = create_import_graph()
-
-
-if __name__ == "__main__":
-    print("导入流程已创建")

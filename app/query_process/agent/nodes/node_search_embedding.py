@@ -79,7 +79,7 @@ def node_search_embedding(state: QueryGraphState) -> QueryGraphState:
         logger.info(f"检索到 {len(chunks)} 个相关切片")
 
     except Exception as e:
-        logger.error(f"向量检索失败: {e}", exc_info=True)
+        logger.exception(f"向量检索失败: {e}")
         state["embedding_chunks"] = []
 
     add_done_task(session_id, func_name, is_stream)

@@ -68,7 +68,7 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
 
     except Exception as e:
         state["failed_stage"] = "mineru"
-        logger.error(f"【{func_name}】PDF转MD失败: {e}", exc_info=True)
+        logger.exception(f"【{func_name}】PDF转MD失败: {e}")
         raise
 
     finally:

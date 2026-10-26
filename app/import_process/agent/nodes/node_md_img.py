@@ -98,7 +98,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
             state["md_path"] = str(new_md_path)
 
     except Exception as e:
-        logger.error(f"图片处理失败: {e}", exc_info=True)
+        logger.exception(f"图片处理失败: {e}")
 
     finally:
         add_done_task(state.get("task_id", ""), func_name)

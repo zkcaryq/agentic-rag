@@ -95,7 +95,7 @@ def _publish(exchange: str, routing_key: str, payload: Dict[str, Any], label: st
         logger.info(f"{label}已投递: {payload.get('task_id') or payload.get('session_id')}")
         return True
     except Exception as e:
-        logger.error(f"投递{label}失败: {e}", exc_info=True)
+        logger.exception(f"投递{label}失败: {e}")
         return False
 
 

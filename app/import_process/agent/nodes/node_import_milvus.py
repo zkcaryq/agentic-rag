@@ -69,7 +69,7 @@ def node_import_milvus(state: ImportGraphState) -> ImportGraphState:
 
     except Exception as e:
         state["failed_stage"] = "milvus"
-        logger.error(f"Milvus入库失败: {e}", exc_info=True)
+        logger.exception(f"Milvus入库失败: {e}")
         add_done_task(state.get("task_id", ""), func_name)
         raise
 

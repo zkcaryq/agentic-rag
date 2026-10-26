@@ -146,7 +146,7 @@ def _run_query_async(state, session_id: str) -> None:
         metrics.record(QUERY_ENDPOINT, total_ms=(time.monotonic() - started) * 1000)
         update_task_status(session_id, "completed", push_queue=True)
     except Exception as e:
-        logger.error(f"[{session_id}] 查询失败: {e}", exc_info=True)
+        logger.exception(f"[{session_id}] 查询失败: {e}")
         set_task_result(session_id, "error", str(e))
         update_task_status(session_id, "failed", push_queue=True)
         push_to_session(

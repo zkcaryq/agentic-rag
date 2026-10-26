@@ -61,7 +61,7 @@ def node_product_name_recognition(state: ImportGraphState) -> ImportGraphState:
         logger.info(f"产品名称识别完成: {product_name}")
 
     except Exception as e:
-        logger.error(f"主体识别失败: {e}", exc_info=True)
+        logger.exception(f"主体识别失败: {e}")
         state["product_name"] = state.get("file_title", "未知产品")
 
     finally:

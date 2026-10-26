@@ -51,7 +51,7 @@ def node_bge_embedding(state: ImportGraphState) -> ImportGraphState:
     except Exception as e:
         # 明确的失败阶段，供任务表统计失败率使用
         state["failed_stage"] = "embedding"
-        logger.error(f"向量化失败: {e}", exc_info=True)
+        logger.exception(f"向量化失败: {e}")
         add_done_task(state.get("task_id", ""), func_name)
         raise
 

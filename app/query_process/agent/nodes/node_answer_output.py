@@ -219,7 +219,7 @@ def _generate(
             parts.append(text)
             push_to_session(session_id, SSEEvent.DELTA, {"delta": text})
     except Exception as e:
-        logger.error(f"流式生成中断，降级为抽取式答案: {e}", exc_info=True)
+        logger.exception(f"流式生成中断，降级为抽取式答案: {e}")
         if not parts:
             answer = _extractive_answer(used_docs)
             push_to_session(session_id, SSEEvent.DELTA, {"delta": answer})

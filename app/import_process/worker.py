@@ -48,7 +48,7 @@ def _on_message(channel, method, properties, body) -> None:
     try:
         result = execute_import(**kwargs)
     except Exception as e:  # execute_import 内部已兜底，这里防御编程
-        logger.error(f"[{task_id}] worker 执行异常: {e}", exc_info=True)
+        logger.exception(f"[{task_id}] worker 执行异常: {e}")
         channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         return
 

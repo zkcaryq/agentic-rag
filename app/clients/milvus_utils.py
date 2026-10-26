@@ -73,7 +73,7 @@ def get_milvus_client():
             ensure_collection_loaded(_milvus_client, milvus_config.chunks_collection)
         return _milvus_client
     except Exception as e:
-        logger.error(f"Milvus客户端连接异常：{str(e)}", exc_info=True)
+        logger.exception(f"Milvus客户端连接异常：{str(e)}")
         return None
 
 
@@ -177,9 +177,9 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
                 )
                 return res
             except Exception as retry_error:
-                logger.error(f"Milvus混合搜索重试仍失败：{retry_error}", exc_info=True)
+                logger.exception(f"Milvus混合搜索重试仍失败：{retry_error}")
                 return None
-        logger.error(f"Milvus混合搜索执行失败，集合[{collection_name}]：{str(e)}", exc_info=True)
+        logger.exception(f"Milvus混合搜索执行失败，集合[{collection_name}]：{str(e)}")
         return None
 
 
@@ -219,9 +219,9 @@ def dense_search(client, collection_name, dense_vector, limit=5, output_fields=N
                     output_fields=output_fields,
                 )
             except Exception as retry_error:
-                logger.error(f"Milvus纯稠密搜索重试仍失败：{retry_error}", exc_info=True)
+                logger.exception(f"Milvus纯稠密搜索重试仍失败：{retry_error}")
                 return None
-        logger.error(f"Milvus纯稠密搜索失败，集合[{collection_name}]：{str(e)}", exc_info=True)
+        logger.exception(f"Milvus纯稠密搜索失败，集合[{collection_name}]：{str(e)}")
         return None
 
 

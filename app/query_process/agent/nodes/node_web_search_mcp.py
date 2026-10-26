@@ -37,7 +37,7 @@ def node_web_search_mcp(state: QueryGraphState) -> QueryGraphState:
         logger.info(f"联网搜索完成，获取 {len(docs)} 条结果")
 
     except Exception as e:
-        logger.error(f"联网搜索失败: {e}", exc_info=True)
+        logger.exception(f"联网搜索失败: {e}")
         state["web_search_docs"] = []
 
     add_done_task(state.get("session_id", ""), func_name, state.get("is_stream", False))

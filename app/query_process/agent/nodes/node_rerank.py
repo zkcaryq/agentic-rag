@@ -104,7 +104,7 @@ def node_rerank(state: QueryGraphState) -> QueryGraphState:
 
     except Exception as e:
         # 故障降级：重排不可用时按 RRF 顺序保底，保证问答链路不断
-        logger.error(f"重排序失败，降级为 RRF 顺序: {e}", exc_info=True)
+        logger.exception(f"重排序失败，降级为 RRF 顺序: {e}")
         state["reranked_docs"] = rrf_chunks[:MAX_KEEP]
 
     add_done_task(session_id, func_name, is_stream)

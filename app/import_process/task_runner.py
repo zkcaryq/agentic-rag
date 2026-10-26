@@ -88,5 +88,5 @@ def execute_import(
             error_type=e.__class__.__name__,
             error_message=str(e),
         )
-        logger.error(f"[{task_id}] 导入任务失败（阶段 {failed_stage}）: {e}", exc_info=True)
+        logger.exception(f"[{task_id}] 导入任务失败（阶段 {failed_stage}）: {e}")
         return {"status": TASK_STATUS_FAILED, "failed_stage": failed_stage}

@@ -62,7 +62,7 @@ def node_document_split(state: ImportGraphState) -> ImportGraphState:
         logger.info(f"切分完成，共生成 {len(chunks)} 个Chunk")
 
     except Exception as e:
-        logger.error(f"文档切分失败: {e}", exc_info=True)
+        logger.exception(f"文档切分失败: {e}")
 
     finally:
         add_done_task(state.get("task_id", ""), func_name)

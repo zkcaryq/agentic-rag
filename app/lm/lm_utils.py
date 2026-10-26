@@ -99,6 +99,6 @@ if __name__ == "__main__":
         logger.info("✅ 测试4通过：JSON输出模式客户端创建成功")
 
     except Exception as e:
-        logger.error(f"❌ LLM客户端工具测试失败：{str(e)}", exc_info=True)
+        logger.exception(f"❌ LLM客户端工具测试失败：{str(e)}")
     finally:
         logger.info("===== LLM客户端工具测试结束 =====")

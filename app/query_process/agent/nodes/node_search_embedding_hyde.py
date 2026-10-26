@@ -92,7 +92,7 @@ def node_search_embedding_hyde(state: QueryGraphState) -> QueryGraphState:
         logger.info(f"HyDE检索到 {len(chunks)} 个相关切片")
 
     except Exception as e:
-        logger.error(f"HyDE检索失败: {e}", exc_info=True)
+        logger.exception(f"HyDE检索失败: {e}")
         state["hyde_embedding_chunks"] = []
         state["hyde_doc"] = ""
 

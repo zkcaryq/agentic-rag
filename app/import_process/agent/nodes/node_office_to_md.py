@@ -50,7 +50,7 @@ def node_office_to_md(state: ImportGraphState) -> ImportGraphState:
 
     except Exception as e:
         state["failed_stage"] = "office"
-        logger.error(f"Office 解析失败: {e}", exc_info=True)
+        logger.exception(f"Office 解析失败: {e}")
         add_done_task(state.get("task_id", ""), func_name)
         raise
 

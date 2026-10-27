@@ -391,3 +391,18 @@ def test_cleanup_parts_removes_intermediate_artifacts(tmp_path):
     assert not (tmp_path / "doc_part01").exists()
     assert not (tmp_path / "doc_part01.pdf").exists()
     assert (tmp_path / "doc.pdf").exists()      # 原文件不能跟着被删
+
+
+# ==================== 引用可核验性 ====================
+def test_references_carry_web_url_for_verification():
+    """联网引用没有 url 就是一条点不开的死链，用户无法核验。"""
+    from app.query_process.agent.nodes.node_answer_output import _build_references
+
+    docs = [
+        {"source": "web", "title": "奔图官方售后热线", "url": "https://example.org/a?fid=1", "snippet": "x"},
+        {"source": "embedding", "file_title": "P3030 用户指南", "page_no": 17, "biz_chunk_id": "c1"},
+    ]
+    refs = _build_references(docs)
+    assert refs[0]["url"] == "https://example.org/a?fid=1"
+    assert refs[0]["title"] == "奔图官方售后热线"
+    assert refs[1]["url"] == "" and refs[1]["page_no"] == 17 and refs[1]["biz_chunk_id"] == "c1"

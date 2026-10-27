@@ -174,7 +174,11 @@
                 // 联网来源没有 file_title，只有网页标题；之前一律显示"未知文档"
                 const fromWeb = ref.source === 'web';
                 const name = ref.file_title || ref.title || (fromWeb ? '联网结果' : '未知文档');
-                const file = escapeHtml(name);
+                const url = (ref.url || '').trim();
+                const safeUrl = url.startsWith('http') ? escapeHtml(url) : '';
+                const file = safeUrl
+                    ? `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`
+                    : escapeHtml(name);
                 const tag = fromWeb ? '<span class="ref-meta">［网络］</span>' : '';
                 const page = ref.page_no ? ` 第 ${ref.page_no} 页` : '';
                 const score = typeof ref.rerank_score === 'number'

@@ -140,6 +140,8 @@ def _build_references(used_docs: list[dict]) -> list[dict]:
                 "title": doc.get("title", ""),
                 "file_title": doc.get("file_title", ""),
                 "page_no": doc.get("page_no", 0),
+                # 联网来源只有带 url 才可核验；缺了它，用户看到的是一条点不开的引用
+                "url": doc.get("url", ""),
                 "rerank_score": doc.get("rerank_score"),
                 "rrf_score": doc.get("rrf_score"),
                 "source": doc.get("source", ""),

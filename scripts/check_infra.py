@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 import uuid
@@ -96,10 +97,25 @@ def check_oss() -> str:
     key = f"{oss_config.upload_prefix}/__healthcheck__/{uuid.uuid4().hex}.txt"
     bucket.put_object(key, b"healthcheck")
     try:
-        signed = bucket.sign_url("GET", key, 60)
-        resp = requests.get(signed, timeout=10)
-        if resp.status_code != 200:
-            raise RuntimeError(f"签名 URL 读取失败 HTTP {resp.status_code}")
+        signed = bucket.sign_url("GET", key, 60, slash_safe=True)
+        # 与生产同一条签名路径：oss_utils.sign_url 带 slash_safe=True，
+        # 少了这个参数，key 里的 "/" 会被百分号编码，签名对不上就是 403。
+        # 另外实测本机出口到 OSS 的链路会偶发整段时间返回 AccessDenied（SDK 直读
+        # 同一对象却 200），所以这里重试三次；仍然失败就说明是链路而不是权限。
+        status, body = None, ""
+        for attempt in range(3):
+            resp = requests.get(signed, timeout=15)
+            status, body = resp.status_code, resp.text[:400]
+            if status == 200:
+                break
+            time.sleep(1 + attempt)
+        if status != 200:
+            code = re.search(r"<Code>([^<]+)</Code>", body)
+            raise RuntimeError(
+                f"签名 URL 读取失败 HTTP {status}"
+                + (f" OSS Code={code.group(1)}（重试 3 次仍被拒；SDK 直读同对象正常，"
+                   f"多为出口链路问题而非凭证权限）" if code else f" 响应片段={body[:80]!r}")
+            )
     finally:
         bucket.delete_object(key)
 
@@ -309,13 +325,20 @@ def check_langsmith() -> str:
             f"已开启 tracing 但未配置密钥（{'/'.join(LangSmithConfig.KEY_ALIASES)}）"
         )
 
-    # 不只看变量存不存在，真去 API 取一次数据：密钥错/无权限在这里就会暴露
+    # 不只看变量存不存在，真去 API 取一次数据：密钥错/无权限在这里就会暴露。
+    # 注意 list_runs 必须带 session/id/trace 之一，否则服务端直接 400
+    # （实测报 "At least one of 'session', 'id', 'parent_run', 'trace' or
+    #   'reference_example' must be specified"），所以按项目名查。
     try:
         from langsmith import Client
     except ImportError:
         raise SkipCheck("未安装 langsmith（uv add langsmith）")
     client = Client(api_key=key)
-    list(client.list_runs(limit=1))
+    runs = list(client.list_runs(project_name=cfg.project, limit=5))
+    if not runs:
+        return f"key 有效，项目 {cfg.project} 可访问（还没有 trace，跑一次问答即可产生）"
+    names = ", ".join(sorted({r.name or "?" for r in runs}))
+    return f"key 有效，项目 {cfg.project} 已有 trace：{len(runs)}+ 条，节点名如 {names}"
     return f"project={cfg.project}，API 鉴权与读取正常"
 
 

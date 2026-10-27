@@ -11,10 +11,10 @@
 | --- | --- |
 | **云端真实环境已实测通过**（2026-10-26） | Zilliz Milvus（稠密 HNSW + 稀疏索引，`kb_chunks`）、百炼 `qwen3.7-text-embedding` 稠密1024+稀疏(nnz≈275)、`qwen3.7-text-rerank` 重排、HyDE、WebSearch（百炼 MCP `EnhancedSearch/search_pro`，单节点实测 10 条真结果）、PostgreSQL 17、Redis（含 RPUSH/BLPOP 跨进程探针）、RabbitMQ（导入队列实测 `dispatch=rabbitmq` 跑通）、OSS（写→签名URL读→删）、MinerU（真 PDF 全链路 31.4s 入库 5 切片、页码 1/1/4/5/6）、VLM 图片摘要（4 张图全部生成中文摘要）、切片 ID 端到端可溯源 |
 | 已有真实实现且本地可跑 | 解析入库、切分、混合检索、RRF、断崖截断、引用溯源、上下文预算、SSE 流式、节点进度、断点续跑、评测框架、导入失败率埋点、TTFT/延迟指标、并发压测脚本 |
-| 已实测（2026-10-26 傍晚补） | 查询侧 MQ 派发端到端：`dispatch=rabbitmq` → worker 执行 → 15 个 progress + 8 个 delta + final 经 Redis 总线回到 API 进程再吐给 HTTP 客户端；多 worker 水平扩容对照（见第 3 节）；`/metrics` 跨进程合并 |
-| 代码就绪但**还没实测** | `reembed_existing.py` 不写 `import_tasks` 表，所以"导入失败率 <4%"仍只覆盖真实上传链，且样本量不够（4% 的分辨率下限约 100 次导入）；语料仍有 3 份 PDF 缺切分产物未入库 |
-| 需要你开一下 | **LangSmith**：开关/别名/自检都已接好（`check_infra` 会拿 key 真调一次 API），但工作区没有任何现成 key，要你去 smith.langchain.com 注册后填 `LANGCHAIN_API_KEY` |
-| 数字待回填 | 召回提升 38%、导入失败率 <4%、并发 TTFT —— 全量重灌跑完出数 |
+| 已实测（2026-10-27 补） | 查询侧 MQ 派发端到端：`dispatch=rabbitmq` → worker 执行 → progress/delta/final 经 Redis 总线回到 API 进程再吐给 HTTP 客户端；**真实浏览器（用户 Chrome）**连问三问：6 个气泡、3 个引用块、无假故障、引用里能看到"第 204 页"（分段解析的页码偏移）与可点开的联网链接；**LangSmith 已真开**：`check_infra` 拿到 key 真调 API 通过，项目 `agentic-rag` 里能看到 `node_rrf / node_rerank / node_answer_output / ChatOpenAI` 的节点级 trace |
+| 语料缺口已闭合（2026-10-27） | MinerU 服务端单次 200 页硬上限是 4 本手册导不进的真因；改成按页切段提交 + 页码偏移合并后，四本全部入库（182/187/224/490 切片）。**库里 86 份文档 / 5529 切片，golden set 的 66 个目标型号 66/66 全覆盖**；占位串 `图片描述` 与 legacy `localhost:9000` 链接已归零，重复向量为 0，`biz_chunk_id` 无缺失无重复 |
+| 还不能对外说的数字 | **"导入失败率 <4%" 仍然不能写**：真实上传链只有 8 次样本（4 次失败全是那个 200 页上限，分段修复后连续 4 次成功），4% 的分辨率下限约需 100 次导入。可以写的是"超页 PDF 分段解析后 4/4 导入成功" |
+| 环境侧偶发（非代码缺陷） | `check_infra` 的 OSS 一项偶发 `AccessDenied`：签名 URL 的 GET 在短时间窗口内被拒（同窗口内 SDK 直读同一对象 200，窗口过后签名 URL 也 200，`/media` 回源实测 6/6 成功）。已让自检与生产走同一条签名路径（`slash_safe=True`）并加 3 次重试，失败信息里明确写"多为出口链路问题而非凭证权限" |
 
 > 关于"跨进程"这条的限制：Milvus Lite 是单进程文件锁，本地演示档永远起不了第二个进程，
 > 所以查询侧 MQ 只有单测与代码；现在 Zilliz 已通，两个进程可以共享同一个向量库，
@@ -29,7 +29,7 @@
 | Python / FastAPI | 两个服务：导入 `:8002`、查询 `:8001` | `app/import_process/api/file_import_service.py`、`app/query_process/api/query_service.py` | 都在 `python xxx.py` 直接起 |
 | PostgreSQL | 会话历史 + 导入任务表 | `app/clients/pg_client.py`、`pg_history_utils.py`、`pg_task_utils.py` | 连接锁 UTC，时长用库的 `now()` 算 |
 | LangChain / LangGraph | 两张状态图 | `app/import_process/agent/main_graph.py`、`app/query_process/agent/main_graph.py` | 导入图带断点续跑包装 `_resumable`（`:40`） |
-| LangSmith | 环境变量接入 | `.env` 的 `LANGCHAIN_TRACING_V2/API_KEY/PROJECT` | 无 key 自动关闭，不阻塞 |
+| LangSmith | 环境变量接入，**已开启并实测** | `.env` 的 `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY` + `LANGCHAIN_PROJECT=agentic-rag`；启动时 `apply_langsmith_env()` 统一注入 | 实测 trace 覆盖图节点：`node_rrf / node_rerank / node_answer_output / ChatOpenAI`；`check_infra` 会真调 API 验证 key 与项目可访问 |
 | **BGE-M3** | **百炼 `text-embedding-v4`**（稠密+稀疏） | `app/lm/providers/dashscope_provider.py:42` | ⚠️ **简历需改**：BGE-M3 走 OpenAI 兼容接口只有稠密，出不了稀疏；只有百炼原生接口支持 `output_type=dense&sparse` |
 | Milvus | Milvus / Zilliz Cloud，本地演示用 Milvus Lite | `app/import_process/agent/nodes/node_import_milvus.py` | schema 含 `biz_chunk_id` + `page_no` |
 | **MinIO** | **阿里云 OSS（私有 bucket + 签名 URL）** | `app/clients/oss_utils.py`、`app/clients/storage.py` | ⚠️ **简历需改**：MinIO 已弃用 |
@@ -100,7 +100,7 @@
 
 | 简历写的 | 取证方式 | 注意事项 |
 | --- | --- | --- |
-| 召回准确率提升约 38% | **实测不成立，已按实测改口径。** 2026-10-26 在 Zilliz（82 份文档 / 4444 切片 / 72 条 golden set / K=5）：`dense` Hit@5=0.8889 MRR=0.8072 NDCG@5=0.8274；`hybrid` 0.8889/0.8176/0.8353；`hyde` 0.8750/0.7979/0.8172；`full`(混合+HyDE+RRF+重排+断崖) **0.8889/0.8461/0.8568**。**但这四个数不是同一次批量跑出来的**：前三条来自 `output/eval/retrieval_20261026_152301.json`，`full` 来自修好重排输入后的单独一次 `retrieval_20261026_153745.json`（同一次批量跑里 `full` 是 0.75/0.5178/0.5764，因为重排文本没带文档身份，B3-420 被兄弟型号挤掉）。所以**这套数字必须等超页手册补完语料后用 `--pipelines all` 单批重跑一次才算数**，在那之前它只能当方向性参考 | 召回被小语料顶满（dense 自己就 0.8889），**增益只在排序**：按上表口径 full 相对 dense 的 MRR +3.9 点（相对 +4.8%）、NDCG +2.9 点（相对 +3.6%）。所以那句要么改成"排序质量 MRR/NDCG 提升约 4%"，要么换更难的评测集；写 38% 一算就穿。复现：`python scripts/eval_retrieval.py --pipelines all --k 5`（四管线批量实测 **1821.5 秒 ≈ 30 分钟**，rerank 需额度） |
+| 召回准确率提升约 38% | **实测不成立，已按实测改口径。** 2026-10-27 语料补齐后**单批**四管线对照（Zilliz，86 份文档 / 5529 切片 / 72 条 golden / K=5，产物 `output/eval/retrieval_20261027_153449.json`）：`dense` Hit@5 0.9444 / MRR 0.8558 / NDCG 0.8778；`hybrid` 0.9444/0.8662/0.8857；`hyde` 0.9444/0.8766/0.8936；`full`(+RRF+重排+断崖) **0.9444/0.8877/0.9021** | 四条管线 **Hit@5 完全相同（0.9444）**——召回被语料规模顶满，任何"召回提升 X%"都无从谈起。真实增益只在排序：full 相对 dense **MRR +3.2 点（相对 +3.7%）、NDCG +2.4 点（相对 +2.8%）**。所以那句要么写成"排序质量 MRR/NDCG 提升约 3%"，要么写"Hit@5 0.94（72 条自建 golden set）"；写 38% 一算就穿。复现：`python scripts/eval_retrieval.py --pipelines all --k 5`（单批实测 344.9+406.5+997.5+834.2 = **2583 秒 ≈ 43 分钟**，rerank 需额度）。**历史包袱**：10-26 那组数（dense 0.8889/0.8072/0.8274、full 0.8889/0.8461/0.8568）来自两次不同运行，同批里 full 只有 0.75/0.5178/0.5764（重排输入没带文档身份，B3-420 被兄弟型号挤掉）——修好后才有上表，两套数不能混用 |
 | 大文档导入失败率 <4% | `import_tasks` 表统计：分母 = completed + failed，partial_success 单列；`python scripts/import_stats.py`。**统计完整性已加固**：0 切片的导入现在记 `failed/split/EmptyChunks`（实测 PG 行 `('empty-chunk-1','failed','split','EmptyChunks',0)`），不再静默算成功稀释失败率 | **样本量仍然不够，别写 4%**：4% 的分辨率下限约需 100 次真实上传链导入，目前只有 MinerU 全链路 1 次 + 复用产物重灌 82 次（后者不写 `import_tasks`）。要拿到能上简历的数字，得把 85 份 PDF 全走 `/upload` 真导一遍 |
 | 图文混排文档入库 | 72 条 golden set 里 **19 条**专考图片/表格内容；chunk 正文里保留 `[图片：VLM 摘要]` | 可用 `scripts/check_golden.py` 自检 |
 | 「支撑并发知识库查询」 | `scripts/bench_concurrency.py --concurrency N --total M`，报成功率、吞吐、TTFT/端到端 P50/P95/P99 | **实测（真实云端栈，查询走 MQ）：** 1 worker × 4并发4轮 → 4/4 成功，TTFT P50 **53.3s**，0.04 轮/秒；3 worker × 同一负载 → 4/4，P50 **20.3s**，0.08 轮/秒；3 worker × 6并发12轮 → **12/12**，P50 23.7s，0.17 轮/秒。诚实边界：6 并发那轮此前是 0/12 全失败，这次修复同时改了两个变量（百炼额度充值 + worker 从 1 加到 3），不能把功劳全算给扩容。另有 `GET /metrics`：worker 样本经 Redis `rag:metrics:{pid}` 镜像后由 API 进程合并，实测同时给出 `answer_generate ttft_p50=1008ms`（模型侧）与客户端 `TTFT P50=18.5s`，差值即检索+联网+排队。**所以这句写"查询队列化 + 多 consumer 水平扩容 + TTFT 跨进程可观测"站得住，写"高并发/低延迟"站不住**（单查询端到端仍是十几到几十秒） |
@@ -112,9 +112,9 @@
 | 项 | 实测 |
 | --- | --- |
 | 已入库 | 81 个产品 / 4448 切片（Zilliz `kb_chunks`） |
-| 评测集目标型号 | 66 个，其中 **62 个已入库**，4 个（`CS2610DNW` / `LJ2680DN` / `M3070` / `hl3070`）在 `doc/` 有 PDF 但导不进 |
+| 评测集目标型号 | 66 个，**2026-10-27 起 66/66 全部入库**（此前缺的 `CS2610DNW` / `LJ2680DN` / `M3070` / `hl3070` 已补齐） |
 | dense 的 8 条未命中 | **4 条是语料缺失**（上面那 4 个型号），4 条是相近型号混淆（B5-330 / 平板 C3 / NER214W / MateStation S 被兄弟型号的手册挤掉）——所以 0.8889 里混着数据缺口，不是纯检索能力 |
-| 补导结果 | 4 份全部失败：MinerU 返回 `retry limit reached (5 attempts), please replace the file`；已如实落在 `import_tasks`（4 条 failed）。老代码在这里会用 mock 兜底"成功"，现在会真失败 |
+| 补导结果（2026-10-26 首试 → 10-27 成功） | 首试 4 份全部失败，MinerU 报 `retry limit reached (5 attempts)`；换 `MINERU_MODEL_VERSION` 后拿到真错误 **`number of pages exceeds limit (200 pages)`**（实测页数 205/241/283/630）——这才是要修的东西。按页切段提交 + 页码偏移合并后，4 份全部入库（182/187/224/490 切片），`import_tasks` 里 4 条 failed + 4 条 completed 都是真实记录。老代码在这里会用 mock 兜底"成功"，现在会真失败、也真成功 |
 | 仓库瘦身 | `output/` 从 **1946 MB 降到 69 MB**（删掉 1.88 GB 的 MinerU 解析中间产物：8197 张 jpg、81 个 zip、PDF 副本、`_model.json`、`_content_list_v2.json`），只留链路真正读取的 `chunks.json` / `*content_list.json` / `*.md` / `import_result.json`；删掉原作者 6 月的运行日志与 5 个 `test_*` 垃圾目录 |
 | 瘦身后校验 | `reembed_existing --dry-run` 仍识别 81 份 / 4448 切片；`check_golden` 通过；真跑 1 份 → 页码映射 5/5 命中锚点（说明 content_list 留对了） |
 
@@ -123,7 +123,7 @@
 ```bash
 # 静态（无凭据，CI 同款）
 python -m compileall app scripts tests
-python -m pytest tests/ -q              # 68 个用例
+python -m pytest tests/ -q              # 90 个用例
 python scripts/check_golden.py          # 72 条评测集自检
 
 # 本地演示（无凭据）
@@ -170,10 +170,14 @@ python app/import_process/worker.py     # 消费 arag.import.task
 | MinIO | 阿里云 OSS（私有 bucket + `storage_key` + 签名 URL 回源） | 实际实现已替换并实测通过 |
 | BGE-M3 生成稠密+稀疏双向量 | 百炼 `qwen3.7-text-embedding` 生成稠密(1024)+稀疏双向量 | 只有百炼原生接口支持稀疏输出，实测稀疏 nnz≈275；BGE-M3 本机跑不了（torch DLL 坏），换 SiliconFlow 又出不了稀疏 |
 | Cross-Encoder 重排序 | 补上模型名：百炼 `qwen3.7-text-rerank`（Cross-Encoder） | 现在能报出具体供应商，实测 top1 0.572 |
-| 电商业务文档 | 图文混排的设备/产品手册类文档 | 语料实际是 85 份 3C 设备手册 |
 | **基于 MinerU 完成 PDF/Word/Excel 解析** | **不用改了，这句现在是事实**（2026-10-26 实测：`probe_p3030_manual.docx` / `probe_p3030_spec.xlsx` 走 MinerU 出 Markdown，端到端 10.4s / 8.8s；MinerU 不可用时自动退回本地解析器，任务记 partial_success） |
   面试要能讲两点：① Office 为什么能给 MinerU（实测接口收，返回 `<table>` HTML 表格）；② 为什么还留着 python-docx/openpyxl（零凭据演示档用它，且 MinerU 挂了要有兜底，本地表格转 Markdown 更干净、Excel 还保留行号可溯源）。旧行原因（MinerU 只处理 PDF）已被实测推翻 |
-| 技术栈里的 LangSmith | 要么填上 key 真开起来，要么从技术栈里去掉 | 目前 `enabled=false`，简历写"链路观测"却没有 trace 截图撑腰，不如不开 |
+| 项目背景里的"运营 SOP、选品资料、供应商资质文档、售后处理手册、营销活动方案" | 改成"设备/产品手册类图文混排文档"（或至少把前四类删掉） | **语料实际是 86 份 3C 硬件厂商手册**（打印机/路由器/笔记本/平板/显示器）。写选品资料、营销方案，面试官一句"给我看一份营销方案的检索效果"就答不出来 |
+| 技术栈里的 LangSmith | **不用改了，2026-10-27 已真开**：`LANGCHAIN_TRACING_V2=true` + key + 项目 `agentic-rag`，`check_infra` 真调 API 通过，trace 里能看到 `node_rrf / node_rerank / node_answer_output / ChatOpenAI` | 面试现场可以当场打开 LangSmith 项目页展示节点级链路——这是"链路观测"最硬的证据 |
+| 标题里的"企业私有化知识问答平台" | 措辞可保留，但**必须准备说法**（见下方"私有化怎么答"） | 真实运行依赖公网服务：MinerU 云端解析、百炼 embedding/rerank/chat、Zilliz 云向量库、阿里云 OSS。代码有供应商抽象与零公网依赖的离线演示档，但"当前跑真数据用的是云"这句要主动说 |
+| 简历正文"实现会话持久化断**呢吗**点续跑" | 删掉混进去的"呢吗"两个字 | 简历里的乱码是硬伤，HR 一眼能看到 |
+
+**私有化怎么答（被问必答题）**：架构层面做了供应商抽象——`EMBEDDING_PROVIDER` / `RERANK_PROVIDER` 可取 `dashscope|siliconflow|local|lexical`，存储可取 `oss|local`，向量库可取 `Zilliz|Milvus Standalone|Milvus Lite`；仓库里就有**零凭据、零公网依赖的离线演示档**（词法向量 + 本地文件存储 + 无 LLM 抽取式答案），这条链实测跑通，Hit@5 0.333、TTFT P50 544ms——**只能当"链路通的下限"，不能当业务指标讲**。诚实的边界是：真数据当前在云上，迁到内网需要换掉 MinerU（可用本地 pipeline 版）与百炼（换本地 embedding/rerank）。
 
 可直接粘贴的两句（与代码一一对应）：
 

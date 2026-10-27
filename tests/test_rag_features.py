@@ -2,7 +2,9 @@
 
 全部不依赖网络 / Milvus / API key，可在 CI 里直接跑。
 """
+import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -261,3 +263,107 @@ def test_validate_without_grounding_keeps_urls_untouched():
     answer = "详见 https://anywhere.example/x.png [1]"
     fixed, info = validate_and_fix(answer, 1)
     assert "anywhere.example" in fixed and info["fabricated_urls"] == []
+
+
+# ==================== 超页 PDF 分段解析与合并 ====================
+def test_segment_ranges_covers_every_page_without_overlap():
+    from app.import_process.agent.nodes.node_pdf_to_md import _segment_ranges
+
+    assert _segment_ranges(283, 200) == [(0, 200), (200, 283)]
+    assert _segment_ranges(200, 200) == [(0, 200)]
+    assert _segment_ranges(630, 200) == [(0, 200), (200, 400), (400, 600), (600, 630)]
+    # 边界：段数按页数向上取整，且最后一段不留空
+    assert sum(end - start for start, end in _segment_ranges(630, 200)) == 630
+    assert _segment_ranges(0, 200) == []
+
+
+def test_segment_ranges_guard_against_invalid_limit():
+    from app.import_process.agent.nodes.node_pdf_to_md import _segment_ranges
+
+    assert _segment_ranges(5, 0) == [(0, 5)]      # 上限配成 0 也不能变成死循环
+
+
+def _make_part(tmp_path, index, page_offset, md_text, items, images):
+    """伪造一段 MinerU 产物目录：md + content_list.json + images/"""
+    extract_dir = tmp_path / f"doc_part{index:02d}"
+    (extract_dir / "images").mkdir(parents=True, exist_ok=True)
+    md_path = extract_dir / f"doc_part{index:02d}.md"
+    md_path.write_text(md_text, encoding="utf-8")
+    (extract_dir / f"doc_part{index:02d}_content_list.json").write_text(
+        json.dumps(items, ensure_ascii=False), encoding="utf-8"
+    )
+    for name, payload in images.items():
+        (extract_dir / "images" / name).write_bytes(payload)
+    return {"md_path": str(md_path), "extract_dir": str(extract_dir), "page_offset": page_offset}
+
+
+def test_merge_offsets_page_numbers_across_segments(tmp_path):
+    """段内 page_idx 是局部页码：不叠加偏移，第 201 页会被答成第 1 页。"""
+    from app.import_process.agent.nodes.node_pdf_to_md import merge_part_outputs
+
+    parts = [
+        _make_part(tmp_path, 1, 0, "第一段正文", [{"text": "第一段正文", "page_idx": 0}], {}),
+        _make_part(
+            tmp_path,
+            2,
+            200,
+            "第二段正文",
+            [{"text": "第二段正文", "page_idx": 0}, {"text": "第二段尾", "page_idx": 5}],
+            {},
+        ),
+    ]
+    md_path = merge_part_outputs(parts, tmp_path / "doc", "doc")
+
+    text = Path(md_path).read_text(encoding="utf-8")
+    assert "第一段正文" in text and "第二段正文" in text
+    assert text.index("第一段正文") < text.index("第二段正文")
+
+    merged = json.loads((tmp_path / "doc" / "doc_content_list.json").read_text(encoding="utf-8"))
+    # 合并存的是 0-based 全局页索引，attach_page_numbers 再 +1 转成人类页码
+    assert [item["page_idx"] for item in merged] == [0, 200, 205]
+
+
+def test_merge_renames_colliding_images_and_rewrites_refs(tmp_path):
+    """两段出现同名不同内容的图片时，后一段改名，正文与 img_path 同步改。"""
+    from app.import_process.agent.nodes.node_pdf_to_md import merge_part_outputs
+
+    parts = [
+        _make_part(
+            tmp_path, 1, 0,
+            "![图](images/abc.jpg)",
+            [{"type": "image", "page_idx": 3, "img_path": "images/abc.jpg"}],
+            {"abc.jpg": b"first-image-bytes"},
+        ),
+        _make_part(
+            tmp_path, 2, 200,
+            "![图](images/abc.jpg)",
+            [{"type": "image", "page_idx": 3, "img_path": "images/abc.jpg"}],
+            {"abc.jpg": b"second-image-bytes-longer"},
+        ),
+    ]
+    md_path = merge_part_outputs(parts, tmp_path / "doc", "doc")
+
+    text = Path(md_path).read_text(encoding="utf-8")
+    assert "images/p2-abc.jpg" in text
+    assert (tmp_path / "doc" / "images" / "abc.jpg").read_bytes() == b"first-image-bytes"
+    assert (tmp_path / "doc" / "images" / "p2-abc.jpg").read_bytes() == b"second-image-bytes-longer"
+
+    merged = json.loads((tmp_path / "doc" / "doc_content_list.json").read_text(encoding="utf-8"))
+    assert [item["img_path"] for item in merged] == ["images/abc.jpg", "images/p2-abc.jpg"]
+    assert [item["page_idx"] for item in merged] == [3, 203]
+
+
+def test_cleanup_parts_removes_intermediate_artifacts(tmp_path):
+    """中间段目录必须清掉，否则 attach_page_numbers 的 rglob 会捡到某一段的 json。"""
+    from app.import_process.agent.nodes.node_pdf_to_md import _cleanup_parts
+
+    (tmp_path / "doc_part01").mkdir()
+    (tmp_path / "doc_part01" / "doc_part01_content_list.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "doc_part01.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4")
+
+    _cleanup_parts(tmp_path, "doc", [{"extract_dir": str(tmp_path / "doc_part01")}])
+
+    assert not (tmp_path / "doc_part01").exists()
+    assert not (tmp_path / "doc_part01.pdf").exists()
+    assert (tmp_path / "doc.pdf").exists()      # 原文件不能跟着被删

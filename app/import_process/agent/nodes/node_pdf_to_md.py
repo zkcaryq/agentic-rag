@@ -32,8 +32,8 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
 
     核心流程：
         1. 校验PDF路径和输出目录
-        2. 上传PDF至MinerU并轮询解析结果
-        3. 下载ZIP包并提取MD文件
+        2. 上传PDF至MinerU并轮询解析结果（超过单次页数上限时切段逐段提交）
+        3. 下载ZIP包并提取MD文件（分段时合并为单本，页码按段偏移校正）
         4. 读取MD内容并更新状态
 
     Args:
@@ -52,11 +52,10 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
         # 步骤1：校验路径
         pdf_path, output_dir = step_1_validate_paths(state)
 
-        # 步骤2：上传并轮询
-        zip_url = step_2_upload_and_poll(pdf_path, output_dir)
-
-        # 步骤3：下载并提取MD文件
-        md_path = step_3_download_and_extract(zip_url, output_dir, pdf_path.stem)
+        # 步骤2+3：提交 MinerU 并取回 Markdown（超过单次页数上限会自动分段再拼回单本）
+        md_path, submit_count = parse_with_page_limit(pdf_path, output_dir)
+        if submit_count > 1:
+            logger.info(f"【{func_name}】本份文档分 {submit_count} 段提交后已合并为单一 Markdown")
 
         # 更新状态
         state["md_path"] = md_path
@@ -119,6 +118,102 @@ def step_1_validate_paths(state: ImportGraphState):
     logger.info(f"输出目录: {output_dir_obj}")
 
     return pdf_path_obj, output_dir_obj
+
+
+def parse_with_page_limit(pdf_path_obj: Path, output_dir_obj: Path) -> tuple[str, int]:
+    """提交 MinerU 解析，返回 (Markdown 路径, 提交次数)。
+
+    MinerU 服务端对单个任务有页数硬上限（实测 200 页，报
+    "number of pages exceeds limit (200 pages), please split the file and try
+    again"）。语料里 4 本原厂手册因此全部导入失败，其中一本 630 页——这不是
+    边角情况，所以在这里按上限切段逐段提交，再把各段产物拼回「单本」的样子，
+    下游节点不必知道切过段。
+    """
+    pages = _pdf_page_count(pdf_path_obj)
+    limit = mineru_config.max_pages_per_task
+    if limit <= 0 or pages is None or pages <= limit:
+        zip_url = step_2_upload_and_poll(pdf_path_obj, output_dir_obj)
+        return step_3_download_and_extract(zip_url, output_dir_obj, pdf_path_obj.stem), 1
+
+    ranges = _segment_ranges(pages, limit)
+    logger.info(f"PDF 共 {pages} 页，超过 MinerU 单次上限 {limit} 页，切为 {len(ranges)} 段")
+
+    parts: list[dict] = []
+    try:
+        for order, (start, end) in enumerate(ranges, start=1):
+            part_name = f"{pdf_path_obj.stem}_part{order:02d}"
+            part_path = output_dir_obj / f"{part_name}.pdf"
+            _write_pdf_range(pdf_path_obj, part_path, start, end)
+
+            zip_url = step_2_upload_and_poll(part_path, output_dir_obj)
+            part_md = step_3_download_and_extract(zip_url, output_dir_obj, part_name)
+            parts.append(
+                {
+                    "md_path": part_md,
+                    "extract_dir": str(output_dir_obj / part_name),
+                    "page_offset": start,
+                }
+            )
+            logger.info(f"第 {order}/{len(ranges)} 段解析完成（原文件第 {start + 1}-{end} 页）")
+
+        md_path = merge_part_outputs(
+            parts, output_dir_obj / pdf_path_obj.stem, pdf_path_obj.stem
+        )
+    finally:
+        _cleanup_parts(output_dir_obj, pdf_path_obj.stem, parts)
+
+    return md_path, len(ranges)
+
+
+def _pdf_page_count(pdf_path_obj: Path) -> int | None:
+    """读页数。读不出来就返回 None，按"不分段"处理，让服务端去报真实错误。"""
+    if pdf_path_obj.suffix.lower() != ".pdf":
+        return None
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(str(pdf_path_obj), strict=False).pages)
+    except Exception as e:
+        logger.warning(f"读取 PDF 页数失败，按整本提交: {e}")
+        return None
+
+
+def _segment_ranges(total_pages: int, limit: int) -> list[tuple[int, int]]:
+    """页区间列表，(首页, 尾页) 左闭右开、0-based。
+
+    limit <= 0 视为"没配上限"，整本一段返回——不能把 0 当步长，那是死循环。
+    """
+    if total_pages <= 0:
+        return []
+    if limit <= 0:
+        return [(0, total_pages)]
+    return [
+        (start, min(start + limit, total_pages))
+        for start in range(0, total_pages, limit)
+    ]
+
+
+def _write_pdf_range(pdf_path_obj: Path, part_path: Path, start: int, end: int) -> None:
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(str(pdf_path_obj), strict=False)
+    writer = PdfWriter()
+    for index in range(start, end):
+        writer.add_page(reader.pages[index])
+    with open(part_path, "wb") as f:
+        writer.write(f)
+
+
+def _cleanup_parts(output_dir_obj: Path, stem: str, parts: list[dict]) -> None:
+    """删掉分段中间产物。
+
+    必须删：attach_page_numbers 是在任务目录里 rglob content_list.json 取最大的
+    那份，留着各段自己的 json，页码就会捡到某一段的局部页码（第 201 页被写成第 1 页）。
+    """
+    for part in parts:
+        shutil.rmtree(Path(part["extract_dir"]), ignore_errors=True)
+    for part_pdf in output_dir_obj.glob(f"{stem}_part*.pdf"):
+        part_pdf.unlink(missing_ok=True)
 
 
 def step_2_upload_and_poll(pdf_path_obj: Path, output_dir_obj: Path):
@@ -279,3 +374,74 @@ def step_3_download_and_extract(zip_url: str, output_dir_obj: Path, pdf_stem: st
     # 曾经这里会写一段假的 "这是从PDF转换而来的Markdown内容"，导致入库的是占位文本。
     # 现在找不到 MD 就直接失败，宁可让导入任务记失败，也不制造假数据。
     raise RuntimeError(f"未在 MinerU 结果包中找到 Markdown 文件: {zip_url}")
+
+
+def merge_part_outputs(parts: list[dict], final_dir: Path, stem: str) -> str:
+    """把各段产物拼成单本：一份 Markdown + 一份页码已校正的 content_list.json。
+
+    段内 page_idx 是从 0 开始的局部页码，不叠加段偏移，答案里的"第几页"就是错的；
+    图片文件名是内容哈希，段与段理论上不撞名，但撞上了不能互相覆盖——改名后同步
+    改写正文引用和 img_path。
+    """
+    final_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = final_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    md_chunks: list[str] = []
+    merged_items: list[dict] = []
+
+    for order, part in enumerate(parts, start=1):
+        extract_dir = Path(part["extract_dir"])
+        offset = int(part.get("page_offset") or 0)
+        text = Path(part["md_path"]).read_text(encoding="utf-8", errors="ignore")
+
+        renames: dict[str, str] = {}
+        part_images = extract_dir / "images"
+        if part_images.exists():
+            for image in sorted(p for p in part_images.iterdir() if p.is_file()):
+                target_name = image.name
+                dest = images_dir / target_name
+                if dest.exists() and dest.stat().st_size != image.stat().st_size:
+                    target_name = f"p{order}-{image.name}"
+                    renames[image.name] = target_name
+                shutil.copy2(image, images_dir / target_name)
+        for old_name, new_name in renames.items():
+            text = text.replace(old_name, new_name)
+
+        for item in _load_part_content_list(extract_dir):
+            if isinstance(item.get("page_idx"), int):
+                item["page_idx"] += offset
+            img_path = item.get("img_path")
+            if isinstance(img_path, str):
+                base = Path(img_path).name
+                if base in renames:
+                    item["img_path"] = img_path.replace(base, renames[base])
+            merged_items.append(item)
+
+        md_chunks.append(text.strip())
+
+    final_md = final_dir / f"{stem}.md"
+    final_md.write_text("\n\n".join(md_chunks) + "\n", encoding="utf-8")
+    if merged_items:
+        (final_dir / f"{stem}_content_list.json").write_text(
+            json.dumps(merged_items, ensure_ascii=False), encoding="utf-8"
+        )
+    logger.info(
+        f"分段合并完成: {len(parts)} 段 -> {final_md}, 页锚点 {len(merged_items)} 条"
+    )
+    return str(final_md)
+
+
+def _load_part_content_list(extract_dir: Path) -> list[dict]:
+    """读取某一段的 content_list.json（MinerU 产物里带 page_idx 的那份）。"""
+    candidates = sorted(extract_dir.rglob("*content_list.json"))
+    if not candidates:
+        return []
+    target = max(candidates, key=lambda p: p.stat().st_size)
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"读取分段 content_list.json 失败 {target}: {e}")
+        return []
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []

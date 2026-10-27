@@ -22,6 +22,10 @@ class MineruConfig:
     # MinerU 失败时是否退回本地解析器：Word/Excel 本地能解，退一步比整单失败好；
     # PDF 没有本地兜底，仍然如实报错。
     office_fallback_native: bool
+    # 单次任务的页数上限。MinerU 服务端会直接拒收超页 PDF（实测报
+    # "number of pages exceeds limit (200 pages), please split the file"），
+    # 所以本地先按这个值切段、逐段提交，再把产物拼回来。
+    max_pages_per_task: int
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -50,4 +54,5 @@ mineru_config = MineruConfig(
     office_parse_engine=(os.getenv("OFFICE_PARSE_ENGINE") or "mineru").strip().lower(),
     model_version=(os.getenv("MINERU_MODEL_VERSION") or "vlm").strip().lower(),
     office_fallback_native=_env_bool("OFFICE_PARSE_FALLBACK_NATIVE", True),
+    max_pages_per_task=int(os.getenv("MINERU_MAX_PAGES_PER_TASK") or 200),
 )

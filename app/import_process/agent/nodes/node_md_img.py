@@ -80,6 +80,15 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         # 步骤3：生成图片摘要
         summaries = step_3_generate_summaries(state.get("file_title", "文档"), targets)
 
+        missing = [name for name, _, _ in targets if name not in summaries]
+        if missing:
+            # 摘要缺一条就不能算完全成功：以前这里静默写 "图片描述" 占位并被索引，
+            # 是假实现。现在如实记 image_summary，任务落 partial_success。
+            state["failed_stage"] = "image_summary"
+            logger.warning(
+                f"{len(missing)}/{len(targets)} 张图片未生成 VLM 摘要，任务记为部分成功"
+            )
+
         # 步骤4：上传到 OSS 并替换引用
         new_content = step_4_upload_and_replace(
             state.get("file_title", "doc"),
@@ -98,6 +107,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
             state["md_path"] = str(new_md_path)
 
     except Exception as e:
+        state["failed_stage"] = "image"
         logger.exception(f"图片处理失败: {e}")
 
     finally:
@@ -159,7 +169,11 @@ def step_3_generate_summaries(
     targets: List[Tuple[str, str, Tuple[str, str]]],
     requests_per_minute: int = 9
 ) -> Dict[str, str]:
-    """生成图片摘要"""
+    """生成图片摘要。
+
+    只返回真正生成成功的条目：以前失败时会写死一个 "图片描述" 占位串进正文并被
+    索引，检索命中后看起来像摘要、其实是空话——这是假实现，现在宁可没有描述。
+    """
     summaries = {}
     request_times = deque()
 
@@ -167,9 +181,7 @@ def step_3_generate_summaries(
         # 获取多模态模型客户端
         vlm_client = get_llm_client(model=lm_config.lv_model)
     except Exception as e:
-        logger.warning(f"VLM客户端初始化失败: {e}，使用默认描述")
-        for img_file, _, _ in targets:
-            summaries[img_file] = "图片描述"
+        logger.error(f"VLM 客户端初始化失败，本轮不生成图片摘要: {e}")
         return summaries
 
     for img_file, img_path, context in targets:
@@ -204,14 +216,15 @@ def step_3_generate_summaries(
             summary = response.content.strip().replace("\n", "")[:100]
 
             if not summary:
-                summary = "图片描述"
+                # 模型返回空串也不能补一个占位描述，缺就是缺
+                logger.warning(f"图片摘要为空，跳过: {img_file}")
+                continue
 
             summaries[img_file] = summary
             logger.info(f"图片摘要生成: {img_file} -> {summary[:50]}...")
 
         except Exception as e:
             logger.error(f"图片摘要生成失败 {img_file}: {e}")
-            summaries[img_file] = "图片描述"
 
     return summaries
 
@@ -240,14 +253,19 @@ def step_4_upload_and_replace(
             if not uploaded:
                 continue
 
-            summary = summaries.get(img_file, "图片")
+            summary = summaries.get(img_file, "")
             media_url = f"/media/{storage_key}"
 
             pattern = re.compile(
-                r"!\[.*?\]\(.*?" + re.escape(img_file) + r".*?\)",
+                r"!\[([^\]]*)\]\([^)]*?" + re.escape(img_file) + r"[^)]*\)",
                 re.IGNORECASE
             )
-            md_content = pattern.sub(f"![{summary}]({media_url})", md_content)
+            # 没有 VLM 摘要时保留原文的 alt 文本（MinerU 常常就是图题），
+            # 两者都没有才退化成 "图片"——不能拿假描述去顶替真图题。
+            md_content = pattern.sub(
+                lambda m: f"![{summary or (m.group(1) or '').strip() or '图片'}]({media_url})",
+                md_content,
+            )
 
             logger.info(f"图片已上传: {img_file} -> {storage_key}")
 

@@ -57,7 +57,12 @@
 ## 检索评测
 
 评测集在 `app/eval/golden_set.py`（72 条，按品类分层，19 条专考图片/表格内容）。
-四条管线在同一批用例上对比：纯稠密（基线）、稠密+稀疏、+HyDE、+重排+断崖截断。
+四条管线对照：纯稠密（基线）、稠密+稀疏、+HyDE、+重排+断崖截断。
+一次 `--pipelines all` 约 30 分钟（实测四管线合计 1821.5 秒），会覆盖生成 `docs/rag-eval.md`。
+
+> 注意出处：`docs/rag-eval.md` 只反映**最近一次运行**（当前是单管线 `full`）。
+> 简历里那组对比数字来自同一天两次运行（dense/hybrid/hyde 一批，修好重排输入后的 full 单独一批），
+> 补完语料后必须用下面的命令单批重跑一次才能对外引用。
 
 ```bash
 python scripts/eval_retrieval.py --pipelines all --k 5
@@ -148,7 +153,7 @@ python scripts/eval_retrieval.py --demo --pipelines all --limit 20 --no-write
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/RESUME-ALIGNMENT.md`](docs/RESUME-ALIGNMENT.md) | **简历每条能力 ↔ 代码位置 ↔ 验证命令**，面试前看这份 |
-| [`docs/rag-eval.md`](docs/rag-eval.md) | 检索评测报告（指标口径 + 四条管线对比，待真实环境跑数） |
+| [`docs/rag-eval.md`](docs/rag-eval.md) | 检索评测报告（指标口径 + 最近一次运行的管线结果，由评测脚本覆盖生成） |
 | [`doc/README.md`](doc/README.md) | 语料放置说明（PDF 不入库） |
 
 ## 目录结构
@@ -186,9 +191,15 @@ docs/         RESUME-ALIGNMENT.md（简历逐条对照）、rag-eval.md（评测
   worker 与 API 进程还要能**共享同一个向量库**（Milvus Lite 的单进程文件锁做不到，
   所以这条链路只在 Zilliz 配置下成立）。已在 Zilliz 环境实测通过：`dispatch=rabbitmq`，
   progress/delta/final 经 `rag:sse:{sid}:events` 回到 API 进程再吐给客户端；
-- **查询 worker 是单进程串行消费**（prefetch=1），并发靠多开 worker 进程水平扩容。
+- **worker 并发度 = `RABBITMQ_PREFETCH`**（默认 1）。任务是丢进同尺寸的线程池跑的，主线程只负责
+  驱动 AMQP I/O 与结算 ack：一次导入几十分钟、一次问答十几到几十秒，都超过 `heartbeat=60` 的两拍，
+  如果在回调里同步跑完再 ack，服务端会判连接死亡并把未 ack 的消息**重投给别的 consumer**
+  （实测 292 秒后同一个 task_id 被两个 worker 各跑一遍）。扩容可以加 worker 进程，也可以调大 prefetch；
   实测 4 并发同负载：1 worker TTFT P50 53.3s / 0.04 轮秒，3 worker 20.3s / 0.08 轮秒。
   单查询端到端仍在十几到几十秒量级，别把它说成"低延迟高并发"；
+- **MinerU 单次任务有 200 页硬上限**，超限直接拒收（`number of pages exceeds limit (200 pages)`）。
+  代码按 `MINERU_MAX_PAGES_PER_TASK` 切段逐段提交再拼回单本，页码锚点在合并时叠加段偏移；
+  服务端上限若变化，改这一个环境变量即可；
 - `GET /metrics` 的窗口是进程内的，但 worker 每次记完样本会镜像到 `rag:metrics:{pid}`，
   接口读取时合并所有进程（排除自身 pid 防重复计数），所以 MQ 派发下仍能看到全局 TTFT。
   端到端的用户感知延迟请用 `scripts/bench_concurrency.py`（客户端计时）交叉验证。

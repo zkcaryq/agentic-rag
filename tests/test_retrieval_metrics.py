@@ -77,7 +77,7 @@ def test_empty_cases_returns_zeros():
 
 
 def test_matcher_is_not_global_state():
-    """两次调用用不同 matcher，结果不能互相污染（contract-review 老实现的问题）。"""
+    """两次调用用不同 matcher，结果不能互相污染（所以 matcher 只能按参数传，不能有模块级状态）。"""
     retrieved = ["BAAI/bge-m3 spec"]
     exact = recall_at_k(["bge-m3"], retrieved, 5)
     keyword = recall_at_k(["bge-m3"], retrieved, 5, matcher=keyword_matcher)

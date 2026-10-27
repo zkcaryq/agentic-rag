@@ -32,6 +32,10 @@ from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding
 from app.import_process.agent.nodes.node_document_split import attach_page_numbers  # noqa: E402
 from app.import_process.agent.nodes.node_import_milvus import node_import_milvus  # noqa: E402
 from app.import_process.agent.state import create_default_state  # noqa: E402
+from app.clients.milvus_utils import get_milvus_client  # noqa: E402
+from app.conf.milvus_config import milvus_config  # noqa: E402
+from app.core.logger import logger  # noqa: E402
+from app.utils.escape_milvus_string_utils import escape_milvus_string  # noqa: E402
 from app.utils.text_clean_utils import sanitize_content  # noqa: E402
 
 PLACEHOLDER_MARKER = "这是从PDF转换而来的Markdown内容"
@@ -60,11 +64,40 @@ def is_placeholder(chunks: list[dict]) -> bool:
     return any(PLACEHOLDER_MARKER in chunk.get("content", "") for chunk in chunks)
 
 
-def build_state(chunks_path: Path, chunks: list[dict]) -> dict:
+def existing_product_name(client, collection: str, file_title: str) -> str:
+    """问一次线上库：这份文档实际用的 product_name 是什么。
+
+    chunks.json 是切分节点写的，那时还没做产品识别，所以产物里常常没有 product_name。
+    直接拿 file_title 兜底就会让入库前的 _clean_old_data 删不掉旧行——实测 4 份手册
+    因此各被灌成两份（库里多出 1084 条重复切片，检索结果成对出现）。
+    """
+    if client is None or not file_title:
+        return ""
+    try:
+        rows = client.query(
+            collection_name=collection,
+            filter=f'file_title == "{escape_milvus_string(file_title)}"',
+            output_fields=["product_name"],
+            limit=1,
+        )
+    except Exception as e:  # noqa: BLE001 - 查不到就退回 file_title
+        logger.warning(f"查询已有 product_name 失败: {e}")
+        return ""
+    if isinstance(rows, dict):  # 某些 pymilvus 版本按字段返回
+        values = rows.get("product_name") or []
+        return values[0] if values else ""
+    return (rows[0].get("product_name") or "") if rows else ""
+
+
+def build_state(chunks_path: Path, chunks: list[dict], client=None, collection: str = "") -> dict:
     local_dir = chunks_path.parent
     first = chunks[0]
     file_title = first.get("file_title") or local_dir.name
-    product_name = first.get("product_name") or file_title
+    product_name = (
+        first.get("product_name")
+        or existing_product_name(client, collection, file_title)
+        or file_title
+    )
 
     cleaned = []
     for index, chunk in enumerate(chunks):
@@ -141,8 +174,17 @@ def main() -> int:
     failed = 0
     started = time.perf_counter()
 
+    # 复用同一个连接查已有 product_name，避免把同一份文档灌成两份（见 existing_product_name）
+    try:
+        milvus_client = get_milvus_client()
+    except Exception as e:  # noqa: BLE001 - 连不上时退回 file_title，行为与旧版一致
+        logger.warning(f"无法连接向量库查询产品名，退回 file_title: {e}")
+        milvus_client = None
+
     for index, (path, chunks) in enumerate(planned, start=1):
-        state = build_state(path, chunks)
+        state = build_state(
+            path, chunks, milvus_client, milvus_config.chunks_collection
+        )
         try:
             node_bge_embedding(state)
             node_import_milvus(state)

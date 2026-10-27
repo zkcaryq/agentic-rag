@@ -406,3 +406,40 @@ def test_references_carry_web_url_for_verification():
     assert refs[0]["url"] == "https://example.org/a?fid=1"
     assert refs[0]["title"] == "奔图官方售后热线"
     assert refs[1]["url"] == "" and refs[1]["page_no"] == 17 and refs[1]["biz_chunk_id"] == "c1"
+
+
+def test_sanitize_handles_brackets_inside_alt_text():
+    """库里还剩 12 条 localhost 就是这么漏的：图题里有中括号，整条 Markdown 匹配不上。"""
+    text = (
+        "![调整转印温度：选择[温度]，用▲/▼调节后确认，共五档，默认为中。]"
+        "(http://localhost:9000/knowledge-base-files/upload-images/hak180使用说明书/4bd3c9.jpg)\n"
+        "▲：以 [+] 方向提高温度。"
+    )
+    cleaned = sanitize_content(text)
+    assert "localhost" not in cleaned
+    assert "[图片：调整转印温度：选择[温度]，用▲/▼调节后确认，共五档，默认为中。]" in cleaned
+    assert "▲：以 [+] 方向提高温度。" in cleaned      # 正文一个字都不能丢
+
+
+def test_sanitize_falls_back_for_deeper_nesting():
+    """兜底路径：嵌套太深没匹配上 Markdown 时，裸链接也要被清掉，不留空壳。"""
+    text = "见图 ![带 (括号) 的图题](http://localhost:9000/a/b.jpg) 说明"
+    cleaned = sanitize_content(text)
+    assert "localhost" not in cleaned
+    assert "]()" not in cleaned
+
+
+def test_reembed_reuses_existing_product_name(tmp_path):
+    """chunks.json 早于产品识别写出，所以产物里没有 product_name；拿 file_title 兜底
+    会让入库前的清理删不掉旧行——实测 4 份手册各被灌成两份。"""
+    from scripts.reembed_existing import build_state
+
+    class FakeClient:
+        def query(self, collection_name, filter, output_fields, limit):
+            assert 'file_title == "LJ2680DN用户手册"' in filter
+            return [{"product_name": "联想LJ2680DN激光打印机"}]
+
+    chunks = [{"file_title": "LJ2680DN用户手册", "content": "正文"}]
+    state = build_state(tmp_path / "chunks.json", chunks, FakeClient(), "kb_chunks")
+    assert state["product_name"] == "联想LJ2680DN激光打印机"
+    assert state["chunks"][0]["product_name"] == "联想LJ2680DN激光打印机"

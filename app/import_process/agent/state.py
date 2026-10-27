@@ -39,6 +39,11 @@ class ImportGraphState(TypedDict):
     # 供导入任务表统计失败率与归因使用；成功时为 None
     failed_stage: Optional[str]
 
+    # 这次执行是不是接着断点跑。必须写进 schema：LangGraph 只传递声明过的键，
+    # 之前 task_runner 设了 resumable 但 schema 里没有它，节点包装器读到的永远是
+    # None，"跳过已完成节点"这件事在真实图里从来没生效过（MinerU 被白调了一遍）。
+    resumable: bool
+
 
 # ==================== 默认状态配置 ====================
 def get_default_state() -> ImportGraphState:
@@ -60,6 +65,7 @@ def get_default_state() -> ImportGraphState:
         "product_name": "",
         "embeddings_content": [],
         "failed_stage": None,
+        "resumable": False,
     }
 
 

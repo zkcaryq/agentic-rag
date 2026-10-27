@@ -75,7 +75,7 @@
 | 故障降级兜底 | 检索失败置空、重排失败回退 RRF、流式失败保留已输出、无 LLM 降级抽取式 | 各节点 `except` + `node_answer_output.py:209` |
 | 同步问答 + SSE 流式增量 | `POST /query` 非流式直接返回；流式先建队列再后台跑，`llm.stream` 逐 token 推 `delta` | `query_service.py`、`node_answer_output.py` |
 | 节点级进度跟踪协议 | `ready/progress/delta/final/error/close` + 节点中文名映射 | `app/utils/sse_utils.py`、`app/utils/task_utils.py` |
-| 前端实时观测链路 | 进度条 + `[N]` 引用高亮 + 来源列表（含页码/分数），所有文本做 HTML 转义 | `app/query_process/page/chat.html` |
+| 前端实时观测链路 | 进度条 + `[N]` 引用高亮 + 来源列表（含页码/分数），所有文本做 HTML 转义；联网来源渲染成可点开的外链（`rel="noopener noreferrer"`）并带［网络］标记。**2026-10-27 真实浏览器（用户 Chrome）复验**：同一标签页连问三问 → 6 个气泡、3 个引用块、无"服务出现问题"、答案内无编造链接；引用列表里既有知识库切片（含"第 204 页"，正是分段解析的页码偏移在 UI 上的体现），也有可点开的联网来源 | `app/query_process/page/chat.html`（`renderReferences`） |
 | TTFT / 延迟指标埋点 | 按 endpoint 分桶的滑动窗口（默认 200 样本），P50/P95/P99 线性插值；`query` 记整轮、`answer_generate` 记模型首 Token；埋点后同步镜像样本到 Redis（`record_and_export`） | `app/core/metrics.py`、`node_answer_output.py:203`、`query_service.py` |
 | 指标出口 | `GET /metrics` 合并**本进程窗口 + Redis 里其它进程的样本**（排除自己 pid 防重复计数），并给出当前派发模式；实测 worker 执行的查询也能读到 `answer_generate ttft_p50=1008ms` | `query_service.py`（`metrics_snapshot`）、`clients/redis_utils.py`（`store_metrics/load_all_metrics`） |
 
@@ -86,7 +86,7 @@
 | RabbitMQ 异步分发 | 上传后投递 `arag.import.task`，失败退进程内线程 | `clients/mq_utils.py:102`、`file_import_service.py` |
 | 查询任务也走队列 | `POST /query`（流式）投 `arag.query.task`，由 `app/query_process/worker.py` 消费执行；MQ 或 Redis 任一不可用则退回本进程线程池 | `clients/mq_utils.py:109`、`query_process/worker.py:42`、`query_service.py`（`_mq_dispatch_enabled`） |
 | 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `arag.import.dlq` | `mq_utils.declare_topology` |
-| 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{sid}:events`，API 进程 BLPOP 后转发给 EventSource | `clients/redis_utils.py:72`、`utils/sse_utils.py:58` |
+| 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{通道}:events`，API 进程 BLPOP 后转发给 EventSource。**通道是"一次提问一条"**（`{session}#{uuid8}`，随 MQ 载荷下发给 worker）：早先按 session 复用通道时，Redis 列表的竞争消费会让上一问残留的 `__close__` 把下一问的连接提前收尾，实测出现"七个节点全绿却显示服务出现问题"；会话 id 也从 localStorage（profile 级共享，两个标签页互抢事件）换成 sessionStorage（标签页隔离） | `clients/redis_utils.py`、`utils/sse_utils.py`（`bind_stream`/`channel_of`）、`query_service.py`、`query_process/worker.py`、`page/chat.html`、`tests/test_metrics_and_sse.py` |
 | 长任务消费循环（心跳不被饿死 + 断线重连） | 任务丢线程池执行，主线程只做 `process_data_events` + 完成后 ack/nack。**起因是两起真实事故**：① pika `heartbeat=60`，而导入图要跑几十分钟，回调里同步跑完整图时主线程不发心跳，服务端连丢两拍判连接死亡、把未 ack 的消息重投给别的 consumer——同一个 `task_id` 被两个 worker 各跑一遍（投递后 292 秒出现第二条领取记录）；② 一次 DNS 抖动（`mineru.net getaddrinfo failed`）把 AMQP 流重置，`StreamLostError` 让三个 worker 一起退出，几十分钟的任务停在半路、没人重连就没人重投。现在连接断了按 5s→60s 指数退避重连，重投后靠断点快照接着跑；`safe_close` 还修掉了 finally 里顶着真错误的二次异常。7 个用例钉住形状（投递瞬间不得 ack／结算异常不能停循环／坏消息只 nack 不执行／断线后继续消费） | `clients/mq_utils.py`（`consume_with_heartbeat` / `run_with_reconnect` / `safe_close`）、`import_process/worker.py`、`query_process/worker.py`、`tests/test_mq_consumer.py` |
 | Redis 持久化任务状态 | 任务状态/进度/结果落 Redis（key 前缀 `rag:`，匹配 ACL `~rag:*`），Redis 不可用自动退回内存 | `clients/redis_utils.py`、`task_utils.py` |
 | 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑。**这条曾经是我的过度声明**：`resumable` 没写进 `ImportGraphState` 的 schema，而 LangGraph 只传递声明过的通道，所以节点包装器读到的永远是 None、跳过逻辑在真实图里从未生效（2026-10-27 由 worker 断线重投后"MinerU 把已解析完的文档整本重解析一遍"抓到现场）。现在 schema 已补、并用编译后的整张图钉住四种情形（续跑跳过解析／非续跑照跑／向量与入库永远重跑／默认为 False）。另有一条独立教训：跳过条件必须同时要求 `state["resumable"]`，只看 done 列表会把"重跑一个已完成任务"变成跳解析却又无快照可恢复、0 切片却记 completed 的假成功 | `task_utils.py`（save/load_checkpoint）、`main_graph.py:_resumable`、`agent/state.py:resumable`、`tests/test_import_graph_resume.py` |

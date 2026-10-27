@@ -7,7 +7,7 @@ import sys
 import re
 import base64
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from collections import deque
 import time
 
@@ -167,7 +167,7 @@ def encode_image_to_base64(image_path: str) -> str:
 def step_3_generate_summaries(
     doc_stem: str,
     targets: List[Tuple[str, str, Tuple[str, str]]],
-    requests_per_minute: int = 9
+    requests_per_minute: Optional[int] = None
 ) -> Dict[str, str]:
     """生成图片摘要。
 
@@ -176,6 +176,8 @@ def step_3_generate_summaries(
     """
     summaries = {}
     request_times = deque()
+    if requests_per_minute is None:
+        requests_per_minute = lm_config.vlm_summary_rpm
 
     try:
         # 获取多模态模型客户端

@@ -17,6 +17,9 @@ class LLMConfig:
     llm_model: str
     llm_temperature: float
     context_budget_tokens: int  # 拼上下文时的预算上限（token 近似值）
+    # 图片摘要的调用速率（次/分钟，按 worker 进程计）。批量导入时这一段的耗时是
+    # 线性的：431 张图 @9 次/分 ≈ 48 分钟，所以必须能按额度调，而不是写死。
+    vlm_summary_rpm: int
 
 lm_config = LLMConfig(
     base_url=os.getenv("OPENAI_BASE_URL"),
@@ -25,4 +28,5 @@ lm_config = LLMConfig(
     llm_model=os.getenv("LLM_DEFAULT_MODEL"),
     llm_temperature=float(os.getenv("LLM_DEFAULT_TEMPERATURE")),
     context_budget_tokens=int(os.getenv("CONTEXT_BUDGET_TOKENS", "6000")),
+    vlm_summary_rpm=int(os.getenv("VLM_SUMMARY_RPM", "9")),
 )

@@ -224,3 +224,40 @@ def test_resumable_wrapper_only_skips_when_resuming(monkeypatch):
     assert ran == [1]
     wrapped({"task_id": "t1", "resumable": True})    # 带断点：允许跳过
     assert ran == [1]
+
+
+# ==================== 联网摘要清洗 ====================
+def test_clean_web_snippet_strips_image_placeholders():
+    from app.utils.text_clean_utils import clean_web_snippet
+
+    dirty = "关闭电源后取出硒鼓。【图片】 <https://example.com/image_close_power.jpg>\n![图](http://a/b.jpg)打开前盖"
+    cleaned = clean_web_snippet(dirty)
+    assert "【图片】" not in cleaned
+    assert "example.com" not in cleaned
+    assert "![图]" not in cleaned
+    assert "关闭电源后取出硒鼓" in cleaned and "打开前盖" in cleaned
+
+
+def test_clean_web_snippet_keeps_plain_text_and_empty_safe():
+    from app.utils.text_clean_utils import clean_web_snippet
+
+    assert clean_web_snippet("普通网页摘要，没有图片占位。") == "普通网页摘要，没有图片占位。"
+    assert clean_web_snippet("") == ""
+    assert clean_web_snippet(None) == ""
+
+
+# ==================== 编造链接的后置拦截 ====================
+def test_validate_strips_fabricated_urls():
+    answer = "更换硒鼓见步骤 [1]。\n\n【图片】\n<https://example.com/image1.jpg>\n<https://real.doc/p1.png>"
+    fixed, info = validate_and_fix(answer, 1, "正文里有 https://real.doc/p1.png 这张图")
+    assert "example.com" not in fixed
+    assert "【图片】" not in fixed          # 链接被抽走后不留空壳标题
+    assert "https://real.doc/p1.png" in fixed  # 上下文里有的链接原样保留
+    assert info["fabricated_urls"] == ["https://example.com/image1.jpg"]
+
+
+def test_validate_without_grounding_keeps_urls_untouched():
+    # 没给 grounded_text 时行为与旧版一致（单测/离线调用不该被新逻辑影响）
+    answer = "详见 https://anywhere.example/x.png [1]"
+    fixed, info = validate_and_fix(answer, 1)
+    assert "anywhere.example" in fixed and info["fabricated_urls"] == []

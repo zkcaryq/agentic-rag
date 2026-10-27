@@ -88,10 +88,18 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
     )
 
     raw_answer, answer_mode = _generate(prompt, session_id, is_stream, used_docs)
-    answer, citation_info = validate_and_fix(raw_answer, len(references))
+    # 允许出现链接的范围：检索上下文原文 + 引用条目自带的 url（联网结果）。
+    # 超出这个范围的 URL 一律视为模型编造，直接删（提示词已经不给它编的理由，
+    # 但提示词挡不住所有情况，落库前这一道必须有）。
+    grounded_text = context + "\n" + "\n".join(str(doc.get("url") or "") for doc in used_docs)
+    answer, citation_info = validate_and_fix(raw_answer, len(references), grounded_text)
     if citation_info["has_invalid"]:
         logger.warning(
             f"拦截到不存在的引用编号 {citation_info['invalid_citations']}，已从答案中删除"
+        )
+    if citation_info["fabricated_urls"]:
+        logger.warning(
+            f"拦截到上下文里没有依据的图片/链接 {citation_info['fabricated_urls']}，已从答案中删除"
         )
 
     state["answer"] = answer

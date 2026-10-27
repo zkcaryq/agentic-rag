@@ -17,6 +17,8 @@ class MineruConfig:
     # 解析转换"一致，实测 MinerU 收 docx/xlsx 并返回 Markdown+HTML 表格）
     # 或 native（python-docx / openpyxl，零网络、表格转 Markdown 更干净、保留 Excel 行号）
     office_parse_engine: str
+    # MinerU 解析引擎：vlm（默认）或 pipeline，见 MineruConfig.model_version 的说明
+    model_version: str
     # MinerU 失败时是否退回本地解析器：Word/Excel 本地能解，退一步比整单失败好；
     # PDF 没有本地兜底，仍然如实报错。
     office_fallback_native: bool
@@ -46,5 +48,6 @@ mineru_config = MineruConfig(
     base_url=_mineru_base_url(),
     api_key=os.getenv("MINERU_API_TOKEN"),
     office_parse_engine=(os.getenv("OFFICE_PARSE_ENGINE") or "mineru").strip().lower(),
+    model_version=(os.getenv("MINERU_MODEL_VERSION") or "vlm").strip().lower(),
     office_fallback_native=_env_bool("OFFICE_PARSE_FALLBACK_NATIVE", True),
 )

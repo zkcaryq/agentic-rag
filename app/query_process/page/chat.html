@@ -171,11 +171,15 @@
         function renderReferences(references) {
             if (!references || !references.length) return '';
             const items = references.map((ref) => {
-                const file = escapeHtml(ref.file_title || '未知文档');
+                // 联网来源没有 file_title，只有网页标题；之前一律显示"未知文档"
+                const fromWeb = ref.source === 'web';
+                const name = ref.file_title || ref.title || (fromWeb ? '联网结果' : '未知文档');
+                const file = escapeHtml(name);
+                const tag = fromWeb ? '<span class="ref-meta">［网络］</span>' : '';
                 const page = ref.page_no ? ` 第 ${ref.page_no} 页` : '';
                 const score = typeof ref.rerank_score === 'number'
                     ? ` 分数 ${ref.rerank_score.toFixed(3)}` : '';
-                return `<li>${file}<span class="ref-meta">${page}${score}</span></li>`;
+                return `<li>${file}${tag}<span class="ref-meta">${page}${score}</span></li>`;
             }).join('');
             return `<div class="references"><div class="ref-title">引用来源</div><ol>${items}</ol></div>`;
         }
@@ -224,13 +228,15 @@
             const chatArea = document.getElementById('chatArea');
             const assistantDiv = document.createElement('div');
             assistantDiv.className = 'message assistant';
-            assistantDiv.id = 'tempMessage';
+            // 之前每条消息都用同一个 id="tempMessage"，document.getElementById 只会拿到
+            // 文档里第一个，于是第二条提问的收尾会把第一条的占位气泡删掉、
+            // 或者把错误文案写进别人的气泡。改成 class + 作用域查找。
             assistantDiv.innerHTML = `
                 <div class="message-bubble">
                     <div class="answer-body">
                         <div class="typing"><span>●</span><span>●</span><span>●</span></div>
                     </div>
-                    <div class="progress" id="progressBox"></div>
+                    <div class="progress"></div>
                 </div>
             `;
             chatArea.appendChild(assistantDiv);
@@ -250,44 +256,53 @@
                 eventSource = new EventSource(`${API_BASE}/stream/${data.session_id}`);
 
                 const body = assistantDiv.querySelector('.answer-body');
-                const progressBox = assistantDiv.querySelector('#progressBox');
+                const progressBox = assistantDiv.querySelector('.progress');
+                const closeStream = () => {
+                    if (eventSource) { eventSource.close(); eventSource = null; }
+                    sendBtn.disabled = false;
+                };
 
                 eventSource.addEventListener('progress', (e) => {
                     try { renderProgress(progressBox, JSON.parse(e.data)); } catch (err) { /* ignore */ }
                 });
 
                 eventSource.addEventListener('delta', (e) => {
-                    const deltaData = JSON.parse(e.data);
-                    fullAnswer += deltaData.delta || '';
-                    body.innerHTML = formatContent(fullAnswer);
-                    chatArea.scrollTop = chatArea.scrollHeight;
+                    try {
+                        const deltaData = JSON.parse(e.data);
+                        fullAnswer += deltaData.delta || '';
+                        body.innerHTML = formatContent(fullAnswer);
+                        chatArea.scrollTop = chatArea.scrollHeight;
+                    } catch (err) { /* 单个增量渲染失败不该中断整条流 */ }
                 });
 
                 eventSource.addEventListener('final', (e) => {
-                    const finalData = JSON.parse(e.data);
-                    const tempMsg = document.getElementById('tempMessage');
-                    if (tempMsg) tempMsg.remove();
-                    addMessageToChat('assistant', finalData.answer || fullAnswer, finalData.references);
-                    eventSource.close();
-                    eventSource = null;
-                    sendBtn.disabled = false;
+                    let finalData = {};
+                    try { finalData = JSON.parse(e.data) || {}; } catch (err) { /* 保留已流式渲染的内容 */ }
+                    // 收尾渲染单独兜底：渲染抛错也不能让已经拿到的答案显示成"服务出现问题"
+                    try {
+                        assistantDiv.remove();
+                        addMessageToChat('assistant', finalData.answer || fullAnswer, finalData.references);
+                    } catch (renderError) {
+                        console.error('答案渲染失败:', renderError);
+                        body.innerHTML = formatContent(finalData.answer || fullAnswer || '（答案渲染失败）');
+                    }
+                    closeStream();
                 });
 
                 eventSource.addEventListener('error', () => {
-                    const tempMsg = document.getElementById('tempMessage');
-                    if (tempMsg) {
-                        tempMsg.querySelector('.answer-body').innerHTML = '抱歉，服务出现问题，请稍后重试。';
+                    // 服务端正常收尾也会关掉连接：只要已经拿到内容，就不该报服务故障
+                    if (fullAnswer) {
+                        closeStream();
+                        return;
                     }
-                    if (eventSource) { eventSource.close(); eventSource = null; }
-                    sendBtn.disabled = false;
+                    body.innerHTML = '抱歉，服务出现问题，请稍后重试。';
+                    closeStream();
                 });
 
             } catch (error) {
                 console.error('发送失败:', error);
-                const tempMsg = document.getElementById('tempMessage');
-                if (tempMsg) {
-                    tempMsg.querySelector('.answer-body').innerHTML = '发送失败，请检查网络连接。';
-                }
+                const target = assistantDiv.querySelector('.answer-body');
+                if (target) target.innerHTML = '发送失败，请检查网络连接。';
                 sendBtn.disabled = false;
             }
         }

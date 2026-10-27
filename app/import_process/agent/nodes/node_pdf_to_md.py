@@ -144,7 +144,7 @@ def step_2_upload_and_poll(pdf_path_obj: Path, output_dir_obj: Path):
         url_get_upload = f"{MINERU_BASE_URL}/file-urls/batch"
         req_data = {
             "files": [{"name": pdf_path_obj.name}],
-            "model_version": "vlm"
+            "model_version": mineru_config.model_version
         }
 
         logger.info(f"请求上传URL: {url_get_upload}")

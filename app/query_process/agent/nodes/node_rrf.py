@@ -124,10 +124,16 @@ def _normalize_chunks(chunks: List[Dict], source: str) -> List[Dict]:
 
 
 def _normalize_web_docs(docs: List[Dict]) -> List[Dict]:
-    """标准化联网搜索结果格式"""
+    """标准化联网搜索结果格式。
+
+    网页摘要里常带图片占位和示例链接，不清就会跟着上下文进答案（实测答案尾部
+    出现过【图片】+ 四行 <https://example.com/...jpg>）。
+    """
+    from app.utils.text_clean_utils import clean_web_snippet
+
     result = []
     for i, doc in enumerate(docs):
-        content = doc.get("snippet", doc.get("content", ""))
+        content = clean_web_snippet(doc.get("snippet", doc.get("content", "")))
         if content:
             result.append({
                 "id": f"web_{i}",

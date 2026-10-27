@@ -31,6 +31,7 @@ from app.query_process.agent.main_graph import query_app
 from app.query_process.agent.state import create_default_query_state
 from app.utils.sse_utils import (
     SSEEvent,
+    bind_stream,
     mark_remote_transport,
     push_to_session,
 )
@@ -39,10 +40,18 @@ from app.utils.task_utils import set_task_result, update_task_status
 QUERY_ENDPOINT = "query"
 
 
-def execute_query(session_id: str, query_text: str, is_stream: bool = True) -> dict:
+def execute_query(
+    session_id: str,
+    query_text: str,
+    is_stream: bool = True,
+    stream_id: str = "",
+) -> dict:
     """执行一次查询并推送事件，返回 {status, answer}。"""
-    # 必须在图开始跑之前标记，否则第一个 progress 事件会落进本进程的内存队列
-    mark_remote_transport(session_id)
+    # 必须在图开始跑之前绑定通道并标记 remote：事件按"这次提问的通道"投递，
+    # 否则同一会话的上一问残留事件会被下一问的连接读走
+    if stream_id:
+        bind_stream(session_id, stream_id)
+    mark_remote_transport(stream_id or session_id)
     update_task_status(session_id, "processing", push_queue=True)
 
     state = create_default_query_state(
@@ -80,6 +89,7 @@ def _submit(pool: ThreadPoolExecutor):
             session_id=session_id,
             query_text=query_text,
             is_stream=bool(payload.get("is_stream", True)),
+            stream_id=payload.get("stream_id", ""),
         )
 
     return submit

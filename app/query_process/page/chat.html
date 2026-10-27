@@ -146,10 +146,14 @@
 
     <script>
         const API_BASE = 'http://127.0.0.1:8001';
-        let sessionId = localStorage.getItem('session_id') || generateSessionId();
+        // 会话 id 必须按标签页隔离：SSE 事件走 Redis 列表 rag:sse:{id}:events，
+        // 是 BLPOP 竞争消费——两个标签页共用同一个 id 时会互相抢走同一条回答的事件，
+        // 表现就是答案流出来了但"引用来源"永远不出现（final 被另一个连接读走了）。
+        // localStorage 是全 profile 共享的，所以这里用 sessionStorage。
+        let sessionId = sessionStorage.getItem('session_id') || generateSessionId();
         let eventSource = null;
 
-        localStorage.setItem('session_id', sessionId);
+        sessionStorage.setItem('session_id', sessionId);
 
         function generateSessionId() {
             return 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
@@ -257,7 +261,8 @@
                 const data = await submitResponse.json();
 
                 if (eventSource) eventSource.close();
-                eventSource = new EventSource(`${API_BASE}/stream/${data.session_id}`);
+                // 连本次提问的通道，不是会话通道：会话通道会被上一问的残留事件干扰
+                eventSource = new EventSource(`${API_BASE}/stream/${data.stream_id || data.session_id}`);
 
                 const body = assistantDiv.querySelector('.answer-body');
                 const progressBox = assistantDiv.querySelector('.progress');

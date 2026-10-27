@@ -44,6 +44,7 @@ from app.query_process.agent.main_graph import query_app
 from app.query_process.agent.state import create_default_query_state
 from app.utils.sse_utils import (
     SSEEvent,
+    bind_stream,
     create_sse_queue,
     get_sse_queue,
     mark_remote_transport,
@@ -122,20 +123,40 @@ async def query(request: QueryRequest):
             "references": final_state.get("references", []),
         }
 
-    # 流式：先建队列再派发，客户端随后连 /stream 就能读到缓冲的事件
-    create_sse_queue(session_id)
+    # 流式：每次提问一条独立事件通道。通道若按 session 复用，上一问残留的
+    # __close__ 会被下一问的连接读到，前端就出现"节点全绿却报服务故障"。
+    stream_id = f"{session_id}#{uuid.uuid4().hex[:8]}"
+    bind_stream(session_id, stream_id)
+    create_sse_queue(stream_id)
 
     if _mq_dispatch_enabled() and mq_utils.publish_query_task(
-        {"session_id": session_id, "query": request.query, "is_stream": True}
+        {
+            "session_id": session_id,
+            "stream_id": stream_id,
+            "query": request.query,
+            "is_stream": True,
+        }
     ):
         # 必须在任何 push 之前标记：标记后事件统一走 Redis，本进程队列不再参与
-        mark_remote_transport(session_id)
+        mark_remote_transport(stream_id)
         update_task_status(session_id, "processing", push_queue=True)
-        return {"code": 200, "session_id": session_id, "stream": True, "dispatch": "rabbitmq"}
+        return {
+            "code": 200,
+            "session_id": session_id,
+            "stream_id": stream_id,
+            "stream": True,
+            "dispatch": "rabbitmq",
+        }
 
     update_task_status(session_id, "processing", push_queue=True)
     _executor.submit(_run_query_async, init_state, session_id)
-    return {"code": 200, "session_id": session_id, "stream": True, "dispatch": "local_thread"}
+    return {
+        "code": 200,
+        "session_id": session_id,
+        "stream_id": stream_id,
+        "stream": True,
+        "dispatch": "local_thread",
+    }
 
 
 def _run_query_async(state, session_id: str) -> None:

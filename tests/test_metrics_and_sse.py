@@ -160,3 +160,33 @@ def test_create_sse_queue_is_idempotent():
     second = sse_utils.create_sse_queue(session_id)
     assert first is second
     sse_utils.remove_sse_queue(session_id)
+
+
+# ==================== 一次提问一条通道 ====================
+def test_each_request_gets_its_own_event_channel():
+    """通道按 session 复用会串台：上一问残留的 __close__ 被下一问的连接读到，
+    前端表现成"七个节点全绿却显示服务出现问题"（浏览器实测踩过）。"""
+    from app.utils import sse_utils
+
+    session = "s-channel-test"
+    first = sse_utils.bind_stream(session, f"{session}#aaa")
+    create = sse_utils.create_sse_queue(first)
+    sse_utils.push_to_session(session, "delta", {"delta": "第一问"})
+    assert create.get_nowait()["data"]["delta"] == "第一问"
+
+    second = sse_utils.bind_stream(session, f"{session}#bbb")
+    second_queue = sse_utils.create_sse_queue(second)
+    sse_utils.push_to_session(session, "final", {"answer": "第二问"})
+
+    assert second_queue.get_nowait()["data"]["answer"] == "第二问"
+    assert create.empty()          # 第一问的通道不会再收到第二问的事件
+
+
+def test_channel_resolution_falls_back_to_the_key_itself():
+    """没绑定过的 id（老客户端直接订阅 session_id）必须照旧可用。"""
+    from app.utils import sse_utils
+
+    assert sse_utils.channel_of("plain-session") == "plain-session"
+    sse_utils.bind_stream("plain-session", "plain-session#x1")
+    assert sse_utils.channel_of("plain-session") == "plain-session#x1"
+    assert sse_utils.channel_of("plain-session#x1") == "plain-session#x1"

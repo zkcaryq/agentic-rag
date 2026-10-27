@@ -5,9 +5,17 @@
 """
 import re
 
+# URL 里可以带一层括号——原厂文档的路径常常长这样：
+#   ![图片描述](http://localhost:9000/.../华为擎云W525用户指南-(PGUW-WBX0,KOS&UOS_02,zh-cn)/xxx.jpg)
+# 之前用 [^)]* 匹配，遇到路径里的右括号就提前收尾，剩下的 "…/xxx.jpg)" 会以残文形式
+# 留在正文里并被索引（实测库里 710 个切片带这种残渣）。
 _LEGACY_IMAGE_PATTERN = re.compile(
-    r"!\[([^\]]*)\]\((?:https?://(?:localhost|127\.0\.0\.1|mock\.example\.com)[^)]*)\)"
+    r"!\[([^\]]*)\]\((?:https?://(?:localhost|127\.0\.0\.1|mock\.example\.com)"
+    r"(?:[^()]|\([^()]*\))*)\)"
 )
+
+# 早期 VLM 失败时写死的占位描述，读起来像摘要、其实是空话，一律降级成中性占位
+_PLACEHOLDER_ALT = {"图片描述", "图片", "image", ""}
 
 
 def sanitize_content(text: str) -> str:
@@ -15,7 +23,9 @@ def sanitize_content(text: str) -> str:
 
     def _replace(match: re.Match) -> str:
         alt = (match.group(1) or "").strip()
-        return f"[图片：{alt}]" if alt else "[图片]"
+        if alt.lower() in _PLACEHOLDER_ALT:
+            return "[图片]"
+        return f"[图片：{alt}]"
 
     return _LEGACY_IMAGE_PATTERN.sub(_replace, text or "")
 

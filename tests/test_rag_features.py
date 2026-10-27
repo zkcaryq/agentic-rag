@@ -144,6 +144,30 @@ def test_sanitize_handles_empty_alt():
     assert sanitize_content(text) == "[图片]"
 
 
+def test_sanitize_survives_parentheses_in_url_path():
+    """库里 710 个切片的残渣就是这么来的：路径里有右括号，旧的 [^)]* 提前收尾，
+    剩下的 "…/984b44.jpg)" 以正文形式留在切片里。"""
+    text = (
+        "# 1.1 外观介绍\n\n![图片描述](http://localhost:9000/knowledge-base-files/"
+        "upload-images/华为擎云W525用户指南-(PGUW-WBX0,KOS&UOS_02,zh-cn)/984b44c591.jpg)\n\n"
+        "计算机的配置不同"
+    )
+    cleaned = sanitize_content(text)
+    assert "localhost" not in cleaned
+    assert "984b44c591" not in cleaned          # 不留 URL 残段
+    assert ".jpg)" not in cleaned
+    assert "[图片]" in cleaned
+    assert "计算机的配置不同" in cleaned         # 正文不能被吃掉
+
+
+def test_sanitize_downgrades_placeholder_alt_but_keeps_real_caption():
+    """早期 VLM 失败写死的 "图片描述" 读起来像摘要其实是空话；真图题必须留住。"""
+    fake = sanitize_content("![图片描述](http://localhost:9000/a/b.jpg)")
+    real = sanitize_content("![硒鼓更换三步示意](http://localhost:9000/a/b.jpg)")
+    assert fake == "[图片]" and "图片描述" not in fake
+    assert real == "[图片：硒鼓更换三步示意]"
+
+
 # ==================== Office 解析 ====================
 def test_docx_to_markdown(tmp_path):
     from docx import Document

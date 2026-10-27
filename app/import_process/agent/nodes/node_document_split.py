@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Tuple
 from app.core.logger import logger
 from app.import_process.agent.state import ImportGraphState
 from app.utils.task_utils import add_running_task, add_done_task
+from app.utils.text_clean_utils import sanitize_content
 
 # 配置参数
 DEFAULT_MAX_CONTENT_LENGTH = 2000  # 单个Chunk最大字符数
@@ -90,6 +91,9 @@ def step_1_get_inputs(state: ImportGraphState) -> Tuple[str, str, int]:
     if content:
         # 统一换行符
         content = content.replace("\r\n", "\n").replace("\r", "\n")
+        # 清洗放在入口，而不是只放在手动重灌脚本里：指向 localhost/占位域名的图片
+        # 链接一旦被切进 chunk，就是永久不可点的出处，还会被模型抄进答案
+        content = sanitize_content(content)
         logger.info(f"MD内容长度: {len(content)} 字符")
 
     return content, file_title, max_len

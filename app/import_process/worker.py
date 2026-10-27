@@ -6,10 +6,13 @@
 队列拓扑见 app/clients/mq_utils.declare_topology：
   arag.import  -> arag.import.task
   arag.import.dlx -> arag.import.dlq（处理失败的消息进死信）
+
+任务跑在子线程、ack 在主线程结算，原因写在 mq_utils.consume_with_heartbeat 里：
+导入图远超 60 秒心跳窗口，在回调里同步跑完会被服务端判死并重投给别的 consumer。
 """
-import json
 import os
 import sys
+from concurrent.futures import Future, ThreadPoolExecutor
 
 sys.path.insert(
     0,
@@ -33,30 +36,31 @@ _PAYLOAD_KEYS = (
 )
 
 
-def _on_message(channel, method, properties, body) -> None:
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except Exception as e:
-        logger.error(f"消息解析失败，直接丢进死信: {e}")
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        return
+def _submit(pool: ThreadPoolExecutor):
+    def submit(payload: dict) -> Future:
+        kwargs = {key: payload[key] for key in _PAYLOAD_KEYS if key in payload}
+        task_id = payload.get("task_id", "?")
+        logger.info(f"[{task_id}] worker 收到导入任务，交给执行线程")
+        return pool.submit(execute_import, **kwargs)
 
+    return submit
+
+
+def _settle(future: Future, payload: dict, channel, delivery_tag) -> None:
     task_id = payload.get("task_id", "?")
-    logger.info(f"[{task_id}] worker 收到导入任务")
-
-    kwargs = {key: payload[key] for key in _PAYLOAD_KEYS if key in payload}
     try:
-        result = execute_import(**kwargs)
+        result = future.result()
     except Exception as e:  # execute_import 内部已兜底，这里防御编程
         logger.exception(f"[{task_id}] worker 执行异常: {e}")
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
         return
 
     if result.get("status") == "failed":
         # 进死信，避免毒消息无限重投把队列堵死
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
     else:
-        channel.basic_ack(delivery_tag=method.delivery_tag)
+        channel.basic_ack(delivery_tag=delivery_tag)
+    logger.info(f"[{task_id}] 导入任务结算: {result.get('status')}")
 
 
 def main() -> int:
@@ -64,21 +68,25 @@ def main() -> int:
         logger.error("RABBITMQ_ENABLED=false 或缺少 RABBITMQ_URL，worker 无法启动")
         return 1
 
+    workers = max(int(mq_conf.prefetch_count or 1), 1)
     connection = mq_utils.get_connection()
     channel = connection.channel()
     mq_utils.declare_topology(channel)
-    channel.basic_qos(prefetch_count=mq_conf.prefetch_count)
-    channel.basic_consume(
-        queue=mq_conf.import_queue, on_message_callback=_on_message
-    )
+    channel.basic_qos(prefetch_count=workers)
 
-    logger.info(f"worker 已启动，监听队列 {mq_conf.import_queue}")
+    logger.info(f"worker 已启动，监听队列 {mq_conf.import_queue}（并发 {workers}）")
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="import")
     try:
-        channel.start_consuming()
-    except KeyboardInterrupt:
-        logger.info("worker 收到中断信号，停止消费")
-        channel.stop_consuming()
+        mq_utils.consume_with_heartbeat(
+            connection,
+            channel,
+            mq_conf.import_queue,
+            _submit(pool),
+            _settle,
+        )
     finally:
+        # 不等待在跑的任务：进程退出时未 ack 的消息由服务端重投，断点快照会让重跑很便宜
+        pool.shutdown(wait=False)
         connection.close()
     return 0
 

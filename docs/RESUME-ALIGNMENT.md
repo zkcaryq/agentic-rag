@@ -45,12 +45,13 @@
 | 简历表述 | 实现 | 位置 |
 | --- | --- | --- |
 | MinerU 完成 PDF/Word/Excel 解析 | 调 MinerU v4 云端接口，**PDF 与 Office 同一条路**（实测 MinerU 收 `.docx`/`.xlsx` 并返回 Markdown，表格是 `<table>` HTML）；**去掉了三级 mock 造假**（配置缺失/异常/下载失败一律如实记 `failed_stage=mineru`） | `node_pdf_to_md.py`、`main_graph.route_after_entry` |
+| 超页 PDF 切段解析 | MinerU 服务端有单次 200 页硬上限，直接拒收（实测 4 本原厂手册 205/241/283/630 页全失败）。现在按 `MINERU_MAX_PAGES_PER_TASK` 用 pypdf 切段逐段提交，再把 Markdown 拼回单本、`content_list.json` 的 `page_idx` 叠加段起始页偏移、同名图片改名并同步改写引用，段中间产物合并后删除——下游节点不必知道切过段 | `node_pdf_to_md.py`（`parse_with_page_limit` / `merge_part_outputs` / `_cleanup_parts`） |
 | Office 解析引擎可切换 + 降级 | `OFFICE_PARSE_ENGINE=mineru|native`：默认 mineru；MinerU 挂了自动退回本地解析器并记 `failed_stage=mineru_fallback`（任务算 partial_success，不混进失败率分母）；PDF 没有本地兜底，照旧失败。`native` 用 python-docx 保标题层级/表格、openpyxl 保 sheet 名与行号，零凭据演示档用它 | `conf/mineru_config.py`、`node_pdf_to_md.py` 的 except 分支、`node_office_to_md.py` |
 | 图片资源解耦持久化 | 抽图 → 上传 → 正文只写 `storage_key`，取图走 `/media/{key}`（本地档读文件，OSS 档 302 签名 URL） | `node_md_img.py`、`clients/storage.py` |
 | VLM 生成图片文本摘要 | 单张图 → 上文/下文 → VLM 摘要 → 写回 Markdown 图片标题 | `node_md_img.py:157` |
 | 标题分层切分 | 按 `#{1,6}` 切分 | `node_document_split.py:95` |
 | 超长二次切分 / 过短合并 | 2000 字软上限按段落切、<500 字与前块合并 | `node_document_split.py` 的 `_split_long_chunk` / `_merge_short_chunks` |
-| 页码来源定位 | 从 MinerU `content_list.json` 的 `page_idx` 按正文锚点映射到每个 chunk | `node_document_split.py:240` |
+| 页码来源定位 | 从 MinerU `content_list.json` 的 `page_idx` 按正文锚点映射到每个 chunk；分段解析时页码在合并阶段就叠加段偏移，所以这里拿到的始终是原文档全局页码 | `node_document_split.py:240`、`node_pdf_to_md.py:merge_part_outputs` |
 | 稠密+稀疏双向量入 Milvus | 供应商返回 dense + sparse，写入同一行 | `node_bge_embedding.py:63`、`node_import_milvus.py:108` |
 
 ### 2.2 混合检索与答案追溯
@@ -63,6 +64,7 @@
 | 相关性分数断崖检测动态 Top-K | 绝对阈值 0.30 + 相邻比 0.60 + 上限 8 + 软下限保底 2 | `node_rerank.py:81` `select_by_cliff` |
 | 切片 ID 贯穿全链路 | 切分生成 `chunk_id` → 入库写 `biz_chunk_id` → 检索 `output_fields` 带回 → 引用里返回 | `node_document_split.py:162`、`node_import_milvus.py`、`milvus_utils.py` |
 | 后置校验强制拦截虚假引用 | 正则抽 `[N]`，越界编号直接删掉 | `app/utils/citation_utils.py:18` |
+| 后置拦截虚假链接 | 同样校验答案里出现的 URL：不在「上下文 + 参考切片 url」里的一律删除，并清掉残留的 `【图片】` 空壳。**这条是被真实浏览器测试逼出来的**——`prompts/answer_out.prompt` 第 3 条原本要求模型"在答案末尾追加图片区块"，它手里没有真 URL，只能编出 `https://example.com/image1.jpg`；已改为禁止图片区块与任何 URL 猜测，联网切片入库前也用 `clean_web_snippet` 洗掉 HTML/Markdown 图片语法 | `citation_utils.validate_and_fix(grounded_text=...)`、`node_answer_output.py`、`text_clean_utils.py`、`node_rrf._normalize_web_docs` |
 | 逐段溯源 | 引用返回 `index / biz_chunk_id / file_title / page_no / rerank_score` | `node_answer_output.py` |
 
 ### 2.3 上下文管控与链路观测
@@ -85,6 +87,7 @@
 | 查询任务也走队列 | `POST /query`（流式）投 `arag.query.task`，由 `app/query_process/worker.py` 消费执行；MQ 或 Redis 任一不可用则退回本进程线程池 | `clients/mq_utils.py:109`、`query_process/worker.py:42`、`query_service.py`（`_mq_dispatch_enabled`） |
 | 任务资源隔离 | 导入/查询分属不同 exchange+queue，互不堆积（批量灌库时问答不排队）；导入失败进 `arag.import.dlq` | `mq_utils.declare_topology` |
 | 跨进程事件回传 | worker 在别的进程执行，事件写 Redis 列表 `rag:sse:{sid}:events`，API 进程 BLPOP 后转发给 EventSource | `clients/redis_utils.py:72`、`utils/sse_utils.py:58` |
+| 长任务消费循环（心跳不被饿死） | 任务丢线程池执行，主线程只做 `process_data_events` + 完成后 ack/nack。**起因是真实事故**：pika `heartbeat=60`，而导入图要跑几十分钟，回调里同步跑完整图时主线程不发心跳，服务端连丢两拍判连接死亡、把未 ack 的消息重投给别的 consumer——同一个 `task_id` 被两个 worker 各跑一遍（MinerU 白解析一次）。现在 4 个用例把"投递瞬间不得 ack""结算异常不能停循环"钉死 | `clients/mq_utils.py:consume_with_heartbeat`、`import_process/worker.py`、`query_process/worker.py`、`tests/test_mq_consumer.py` |
 | Redis 持久化任务状态 | 任务状态/进度/结果落 Redis（key 前缀 `rag:`，匹配 ACL `~rag:*`），Redis 不可用自动退回内存 | `clients/redis_utils.py`、`task_utils.py` |
 | 会话持久化断点续跑 | 解析阶段节点完成后存快照，重启后跳过已完成节点；向量与入库重跑。**已实测**：构造 done=[4 个解析节点]+checkpoint 的中间态后重跑，日志给出"已恢复字段: [file_title, md_path, md_content, chunks, product_name ...]"并正常完成。跳过条件额外要求 `state["resumable"]`——只凭 done 列表会把"重跑一个已完成任务"变成跳解析却又无快照可恢复、0 切片却记 completed 的假成功（实测踩过，已加红-绿回归用例） | `task_utils.py`（save/load_checkpoint）、`main_graph.py:_resumable`、`tests/test_rag_features.py` |
 | 并发查询支撑 | `scripts/bench_concurrency.py` 压 SSE 全链路，出客户端口径的 TTFT / 端到端 P50/P95/P99 + 成功率 + 吞吐 | `scripts/bench_concurrency.py` |
@@ -120,7 +123,7 @@
 ```bash
 # 静态（无凭据，CI 同款）
 python -m compileall app scripts tests
-python -m pytest tests/ -q              # 45 个用例
+python -m pytest tests/ -q              # 68 个用例
 python scripts/check_golden.py          # 72 条评测集自检
 
 # 本地演示（无凭据）

@@ -115,3 +115,57 @@ def publish_query_task(payload: Dict[str, Any]) -> bool:
     return _publish(
         mq_conf.query_exchange, mq_conf.query_routing_key, payload, "查询任务"
     )
+
+
+def consume_with_heartbeat(
+    connection,
+    channel,
+    queue: str,
+    submit,
+    settle,
+    *,
+    poll_seconds: float = 1.0,
+) -> None:
+    """长任务消费循环：任务丢线程池，主线程只驱动 AMQP I/O。
+
+    为什么不能直接在回调里跑完再 ack：pika 的心跳只在 I/O 循环里发，而导入图要跑
+    几十分钟、一次问答也要十几到几十秒，都超过 heartbeat=60 的两拍。服务端连续两次
+    收不到心跳就判定连接死亡，把未 ack 的消息重投给别的 consumer——实测同一个
+    task_id 被两个 worker 各跑一遍，MinerU 白解析一次、图片摘要白调一次 VLM。
+    所以：回调只做「解析 + 提交」，ack/nack 由主线程在任务结束后结算。
+
+    submit(payload) -> Future；settle(future, payload, channel, delivery_tag)。
+    """
+    active: list = []
+
+    def _on_message(ch, method, _properties, body) -> None:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception as e:
+            logger.error(f"[{queue}] 消息解析失败，进死信: {e}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+        try:
+            future = submit(payload)
+        except Exception as e:
+            logger.exception(f"[{queue}] 任务提交失败: {e}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+        active.append((future, payload, method.delivery_tag))
+
+    channel.basic_consume(queue=queue, on_message_callback=_on_message)
+    try:
+        while True:
+            connection.process_data_events(time_limit=poll_seconds)
+            for item in list(active):
+                future, payload, delivery_tag = item
+                if not future.done():
+                    continue
+                active.remove(item)
+                try:
+                    settle(future, payload, channel, delivery_tag)
+                except Exception as e:
+                    logger.exception(f"[{queue}] 结算失败: {e}")
+    except KeyboardInterrupt:
+        logger.info(f"[{queue}] 收到中断信号，停止消费（未 ack 的消息由服务端重投）")
+        channel.stop_consuming()

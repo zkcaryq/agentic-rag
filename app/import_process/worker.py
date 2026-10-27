@@ -63,11 +63,7 @@ def _settle(future: Future, payload: dict, channel, delivery_tag) -> None:
     logger.info(f"[{task_id}] 导入任务结算: {result.get('status')}")
 
 
-def main() -> int:
-    if not mq_utils.is_enabled():
-        logger.error("RABBITMQ_ENABLED=false 或缺少 RABBITMQ_URL，worker 无法启动")
-        return 1
-
+def _serve_once() -> None:
     workers = max(int(mq_conf.prefetch_count or 1), 1)
     connection = mq_utils.get_connection()
     channel = connection.channel()
@@ -87,8 +83,14 @@ def main() -> int:
     finally:
         # 不等待在跑的任务：进程退出时未 ack 的消息由服务端重投，断点快照会让重跑很便宜
         pool.shutdown(wait=False)
-        connection.close()
-    return 0
+        mq_utils.safe_close(connection)
+
+
+def main() -> int:
+    if not mq_utils.is_enabled():
+        logger.error("RABBITMQ_ENABLED=false 或缺少 RABBITMQ_URL，worker 无法启动")
+        return 1
+    return mq_utils.run_with_reconnect(_serve_once)
 
 
 if __name__ == "__main__":

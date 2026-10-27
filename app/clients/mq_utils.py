@@ -117,6 +117,42 @@ def publish_query_task(payload: Dict[str, Any]) -> bool:
     )
 
 
+def safe_close(connection) -> None:
+    """关连接，容忍"已经关了"。
+
+    连接被服务端断掉后再调 connection.close() 会抛 ConnectionWrongStateError，
+    在 finally 里就会盖掉真正的错误信息（实测 worker 退出时打的是这个二次异常）。
+    """
+    try:
+        connection.close()
+    except Exception as e:
+        logger.debug(f"关闭连接时忽略: {type(e).__name__}: {e}")
+
+
+def run_with_reconnect(step, *, initial_delay: float = 5.0, max_delay: float = 60.0) -> int:
+    """反复调用 step() 建立连接并消费；连接断了就指数退避重连。
+
+    为什么需要：一次导入要跑几十分钟，中间任何一次网络抖动都会让 pika 抛
+    StreamLostError 直接把 worker 进程带走（实测 3 个 worker 在一次 DNS 抖动后全挂，
+    未 ack 的任务只能靠重连才会被重新投递）。重连后未 ack 的消息回到队列，
+    断点快照让重跑跳过已经完成的解析节点。
+    """
+    import time
+
+    delay = initial_delay
+    while True:
+        try:
+            step()
+            return 0
+        except KeyboardInterrupt:
+            logger.info("收到中断信号，worker 退出")
+            return 0
+        except Exception as e:
+            logger.exception(f"消费循环中断: {type(e).__name__}: {e}；{delay:.0f}s 后重连")
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
+
+
 def consume_with_heartbeat(
     connection,
     channel,

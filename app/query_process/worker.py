@@ -99,14 +99,7 @@ def _settle(future: Future, payload: dict, channel, delivery_tag) -> None:
     logger.info(f"[{session_id}] 查询任务结算: {status}")
 
 
-def main() -> int:
-    if not mq_utils.is_enabled():
-        logger.error("RABBITMQ_ENABLED=false 或缺少 RABBITMQ_URL，worker 无法启动")
-        return 1
-    if not redis_utils.is_enabled():
-        logger.error("REDIS_ENABLED=false：事件无法回传 API 进程，worker 拒绝启动")
-        return 1
-
+def _serve_once() -> None:
     workers = max(int(mq_conf.prefetch_count or 1), 1)
     connection = mq_utils.get_connection()
     channel = connection.channel()
@@ -125,8 +118,17 @@ def main() -> int:
         )
     finally:
         pool.shutdown(wait=False)
-        connection.close()
-    return 0
+        mq_utils.safe_close(connection)
+
+
+def main() -> int:
+    if not mq_utils.is_enabled():
+        logger.error("RABBITMQ_ENABLED=false 或缺少 RABBITMQ_URL，worker 无法启动")
+        return 1
+    if not redis_utils.is_enabled():
+        logger.error("REDIS_ENABLED=false：事件无法回传 API 进程，worker 拒绝启动")
+        return 1
+    return mq_utils.run_with_reconnect(_serve_once)
 
 
 if __name__ == "__main__":

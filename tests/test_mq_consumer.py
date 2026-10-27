@@ -142,3 +142,54 @@ def test_settle_failure_does_not_break_the_loop():
     assert settled == [1]
     assert channel.settled() == []
     assert connection.io_driven >= 3
+
+
+# ==================== 断线重连 ====================
+def test_reconnect_keeps_consuming_after_connection_loss():
+    """真实事故：一次 DNS 抖动让 pika 抛 StreamLostError，3 个 worker 全部退出，
+    几十分钟的任务只能等人工重启才会被重新投递。"""
+    from app.clients.mq_utils import run_with_reconnect
+
+    attempts = []
+
+    def step():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise ConnectionError("StreamLostError")
+
+    assert run_with_reconnect(step, initial_delay=0.001, max_delay=0.002) == 0
+    assert len(attempts) == 3
+
+
+def test_reconnect_backoff_grows_and_normal_return_stops_loop():
+    from app.clients.mq_utils import run_with_reconnect
+
+    delays = []
+    calls = []
+
+    def step():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("channel closed")
+
+    import time
+
+    real_sleep = time.sleep
+    monkey_sleep = lambda s: delays.append(s)
+    time.sleep = monkey_sleep
+    try:
+        assert run_with_reconnect(step, initial_delay=5, max_delay=60) == 0
+    finally:
+        time.sleep = real_sleep
+    assert delays == [5]
+
+
+def test_safe_close_tolerates_already_closed():
+    """finally 里的二次异常会盖掉真正的错误（实测日志里就是它顶着 traceback）。"""
+    from app.clients.mq_utils import safe_close
+
+    class Closed:
+        def close(self):
+            raise RuntimeError("called on closed connection")
+
+    safe_close(Closed())      # 不抛就通过

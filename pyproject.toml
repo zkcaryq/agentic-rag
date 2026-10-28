@@ -1,7 +1,7 @@
 [project]
 name = "agentic-rag"
 version = "0.1.0"
-description = "企业知识库检索增强问答平台：多格式解析、稠密+稀疏混合检索、Cross-Encoder 精排、逐段溯源、SSE 流式问答"
+description = "Agentic-RAG 企业私有化知识问答平台：多格式解析、混合检索、Cross-Encoder 精排、逐段溯源与 SSE 流式问答"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.136.3",

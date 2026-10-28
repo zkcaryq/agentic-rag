@@ -115,7 +115,7 @@
 | 评测集目标型号 | 66 个，**2026-10-27 起 66/66 全部入库**（此前缺的 `CS2610DNW` / `LJ2680DN` / `M3070` / `hl3070` 已补齐） |
 | dense 的 8 条未命中 | **4 条是语料缺失**（上面那 4 个型号），4 条是相近型号混淆（B5-330 / 平板 C3 / NER214W / MateStation S 被兄弟型号的手册挤掉）——所以 0.8889 里混着数据缺口，不是纯检索能力 |
 | 补导结果（2026-10-26 首试 → 10-27 成功） | 首试 4 份全部失败，MinerU 报 `retry limit reached (5 attempts)`；换 `MINERU_MODEL_VERSION` 后拿到真错误 **`number of pages exceeds limit (200 pages)`**（实测页数 205/241/283/630）——这才是要修的东西。按页切段提交 + 页码偏移合并后，4 份全部入库（182/187/224/490 切片），`import_tasks` 里 4 条 failed + 4 条 completed 都是真实记录。老代码在这里会用 mock 兜底"成功"，现在会真失败、也真成功 |
-| 仓库瘦身 | `output/` 从 **1946 MB 降到 69 MB**（删掉 1.88 GB 的 MinerU 解析中间产物：8197 张 jpg、81 个 zip、PDF 副本、`_model.json`、`_content_list_v2.json`），只留链路真正读取的 `chunks.json` / `*content_list.json` / `*.md` / `import_result.json`；删掉原作者 6 月的运行日志与 5 个 `test_*` 垃圾目录 |
+| 仓库瘦身 | `output/` 从 **1946 MB 降到 69 MB**（删掉 1.88 GB 的 MinerU 解析中间产物：8197 张 jpg、81 个 zip、PDF 副本、`_model.json`、`_content_list_v2.json`），只留链路真正读取的 `chunks.json` / `*content_list.json` / `*.md` / `import_result.json`；删掉早期批次的运行日志与 5 个 `test_*` 临时目录 |
 | 瘦身后校验 | `reembed_existing --dry-run` 仍识别 81 份 / 4448 切片；`check_golden` 通过；真跑 1 份 → 页码映射 5/5 命中锚点（说明 content_list 留对了） |
 
 ## 4. 验证命令清单

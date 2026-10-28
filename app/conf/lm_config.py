@@ -22,11 +22,11 @@ class LLMConfig:
     vlm_summary_rpm: int
 
 lm_config = LLMConfig(
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY"),
-    lv_model=os.getenv("VL_MODEL"),
-    llm_model=os.getenv("LLM_DEFAULT_MODEL"),
-    llm_temperature=float(os.getenv("LLM_DEFAULT_TEMPERATURE")),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    api_key=os.getenv("OPENAI_API_KEY", ""),
+    lv_model=os.getenv("VL_MODEL", "qwen-vl-max"),
+    llm_model=os.getenv("LLM_DEFAULT_MODEL", "qwen-plus"),
+    llm_temperature=float(os.getenv("LLM_DEFAULT_TEMPERATURE", "0.3")),
     context_budget_tokens=int(os.getenv("CONTEXT_BUDGET_TOKENS", "6000")),
     vlm_summary_rpm=int(os.getenv("VLM_SUMMARY_RPM", "9")),
 )

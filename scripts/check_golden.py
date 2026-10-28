@@ -28,6 +28,7 @@ from app.eval.golden_set import GOLDEN_SET, get_categories, get_image_cases  # n
 MIN_CASES = 50
 MIN_IMAGE_CASES = 15
 DOC_DIR = ROOT / "doc"
+CORPUS_SUFFIXES = {".pdf", ".docx", ".xlsx", ".md"}
 
 
 def main() -> int:
@@ -49,8 +50,17 @@ def main() -> int:
             errors.append(f"{case.id}: category 为空")
 
     # 关键词必须能在真实语料文件名里命中，否则这条用例根本不可能被召回
+    corpus_files = []
     if DOC_DIR.exists():
-        titles = [path.stem for path in DOC_DIR.iterdir() if path.is_file()]
+        corpus_files = [
+            path
+            for path in DOC_DIR.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in CORPUS_SUFFIXES
+            and path.name.lower() != "readme.md"
+        ]
+    if corpus_files:
+        titles = [path.stem for path in corpus_files]
         for case in GOLDEN_SET:
             for keyword in case.relevant_docs:
                 if not any(keyword in title for title in titles):
@@ -58,7 +68,7 @@ def main() -> int:
                         f"{case.id}: 关键词「{keyword}」在 doc/ 里找不到对应文档"
                     )
     else:
-        print(f"[警告] 找不到语料目录 {DOC_DIR}，跳过关键词核对")
+        print(f"[警告] {DOC_DIR} 中没有实际语料文件，跳过关键词核对")
 
     if len(GOLDEN_SET) < MIN_CASES:
         errors.append(f"用例数 {len(GOLDEN_SET)} 少于下限 {MIN_CASES}")
